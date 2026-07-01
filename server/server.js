@@ -10,7 +10,7 @@ connectDB();
 
 app.use(cors({
   origin: [
-    "https://schoolsms-git-main-ankricks-projects.vercel.app"
+    "https://schoolsms-nine.vercel.app/"
   ]
 }));
 app.use(express.json());
