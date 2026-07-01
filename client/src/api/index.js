@@ -1,6 +1,9 @@
 import axios from "axios";
 
-const api = axios.create({ baseURL: "/api" });
+// In dev, requests hit the Vite proxy (see vite.config.js) so "/api" is enough.
+// In production the frontend and backend are usually on different hosts,
+// so set VITE_API_URL to the deployed backend's full API URL (e.g. https://api.example.com/api).
+const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api" });
 
 const handle = (res) => res.data;
 const err = (e) => {
