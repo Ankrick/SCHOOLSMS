@@ -10,8 +10,7 @@ connectDB();
 
 app.use(cors({
   origin: [
-    "http://localhost:5173",
-    "https://schoolsms-git-main-ankricks-projects.vercel.app/"
+    "https://schoolsms-git-main-ankricks-projects.vercel.app"
   ]
 }));
 app.use(express.json());
