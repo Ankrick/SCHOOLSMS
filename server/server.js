@@ -8,11 +8,7 @@ const app = express();
 
 connectDB();
 
-app.use(cors({
-  origin: [
-    "https://schoolsms-nine.vercel.app/"
-  ]
-}));
+app.use(cors());
 app.use(express.json());
 
 app.use("/api/students", require("./routes/students"));
