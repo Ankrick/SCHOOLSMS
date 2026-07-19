@@ -83,6 +83,12 @@ exports.markPaid = async (req, res, next) => {
     // Payment count = prior payments for this student + 1
     const priorCount = await PaymentHistory.countDocuments({ studentId: invoice.studentId });
 
+    // Students prepay: a payment made when the invoice falls due (its periodEnd)
+    // covers the month ahead, so the receipt period starts at the paid
+    // invoice's periodEnd — matching the next invoice's billing period.
+    const receiptPeriodStart = invoice.periodEnd || paidDate;
+    const receiptPeriodEnd = addMonths(receiptPeriodStart, 1);
+
     // Record payment in history before deleting the invoice
     const history = await PaymentHistory.create({
       studentId: invoice.studentId,
@@ -94,8 +100,8 @@ exports.markPaid = async (req, res, next) => {
       invoiceNumber: invoice.invoiceNumber,
       amount: invoice.amount,
       paidDate,
-      periodStart: invoice.periodStart || "",
-      periodEnd: invoice.periodEnd || "",
+      periodStart: receiptPeriodStart,
+      periodEnd: receiptPeriodEnd,
       paymentCount: priorCount + 1,
       notes: invoice.notes || "",
     });

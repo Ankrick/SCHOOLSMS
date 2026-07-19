@@ -573,7 +573,8 @@ function ReceiptPreview({ payment: ph }) {
   const receiptRef = useRef(null);
   const [saving, setSaving] = useState(false);
 
-  // Use the invoice's due date (periodStart) as billing start — not the actual payment date
+  // periodStart is the month the payment prepaid; fall back to the pay date
+  // (payments cover one month starting from when they're made)
   const billingStart = ph.periodStart || ph.paidDate;
   const billingEnd = ph.periodEnd || addOneMonth(billingStart);
 
