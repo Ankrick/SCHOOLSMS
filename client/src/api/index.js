@@ -5,9 +5,39 @@ import axios from "axios";
 // so set VITE_API_URL to the deployed backend's full API URL (e.g. https://api.example.com/api).
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api" });
 
+const TOKEN_KEY = "titan_sms_token";
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
+const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
+api.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    if (error.response?.status === 401 && error.config.url !== "/auth/login") {
+      clearToken();
+      window.dispatchEvent(new Event("auth:logout"));
+    }
+    return Promise.reject(error);
+  }
+);
+
 const handle = (res) => res.data;
 const err = (e) => {
   throw new Error(e.response?.data?.message || e.message);
+};
+
+// Auth
+export const login = (username, password) =>
+  api.post("/auth/login", { username, password }).then(handle).then(({ token }) => setToken(token)).catch(err);
+export const logout = () => {
+  clearToken();
+  window.dispatchEvent(new Event("auth:logout"));
 };
 
 // Students

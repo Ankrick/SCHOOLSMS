@@ -860,7 +860,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
 }
 
 // ─── MAIN APP ────────────────────────────────────────────────────
-export default function TitanSMS() {
+export default function TitanSMS({ onLogout }) {
   const [activeTab, setActiveTab] = useState("Invoices");
   const [data, setData] = useState({ students: [], batches: [], invoices: [], settings: {}, paymentHistory: [] });
   const [loading, setLoading] = useState(true);
@@ -997,7 +997,19 @@ export default function TitanSMS() {
               </div>
             ))}
           </div>
-          <div style={{ padding: "16px 20px", borderTop: `1px solid ${BRAND.charcoalLight}`, fontSize: 11, color: BRAND.grey }}>
+          <div style={{ padding: "12px 20px", borderTop: `1px solid ${BRAND.charcoalLight}` }}>
+            <button
+              onClick={onLogout}
+              style={{
+                width: "100%", padding: "8px 12px", background: "transparent",
+                color: BRAND.grey, border: `1px solid ${BRAND.charcoalLight}`, borderRadius: 6,
+                fontSize: 12, fontFamily: "inherit", cursor: "pointer",
+              }}
+            >
+              Log out
+            </button>
+          </div>
+          <div style={{ padding: "12px 20px 16px", fontSize: 11, color: BRAND.grey }}>
             v2.0 MERN — Understanding over Memorization
           </div>
         </nav>
