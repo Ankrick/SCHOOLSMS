@@ -861,6 +861,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
 
 // ─── MAIN APP ────────────────────────────────────────────────────
 export default function TitanSMS({ onLogout }) {
+  const role = api.getRole();
   const [activeTab, setActiveTab] = useState("Invoices");
   const [data, setData] = useState({ students: [], batches: [], invoices: [], settings: {}, paymentHistory: [] });
   const [loading, setLoading] = useState(true);
@@ -998,6 +999,11 @@ export default function TitanSMS({ onLogout }) {
             ))}
           </div>
           <div style={{ padding: "12px 20px", borderTop: `1px solid ${BRAND.charcoalLight}` }}>
+            {role && (
+              <div style={{ fontSize: 11, color: BRAND.grey, marginBottom: 8, textTransform: "capitalize" }}>
+                Signed in as {role.replace("_", " ")}
+              </div>
+            )}
             <button
               onClick={onLogout}
               style={{

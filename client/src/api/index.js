@@ -6,9 +6,17 @@ import axios from "axios";
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api" });
 
 const TOKEN_KEY = "titan_sms_token";
+const ROLE_KEY = "titan_sms_role";
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
-const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
-const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+export const getRole = () => localStorage.getItem(ROLE_KEY);
+const setSession = (token, role) => {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(ROLE_KEY, role);
+};
+const clearToken = () => {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(ROLE_KEY);
+};
 
 api.interceptors.request.use((config) => {
   const token = getToken();
@@ -34,7 +42,7 @@ const err = (e) => {
 
 // Auth
 export const login = (username, password) =>
-  api.post("/auth/login", { username, password }).then(handle).then(({ token }) => setToken(token)).catch(err);
+  api.post("/auth/login", { username, password }).then(handle).then(({ token, role }) => setSession(token, role)).catch(err);
 export const logout = () => {
   clearToken();
   window.dispatchEvent(new Event("auth:logout"));

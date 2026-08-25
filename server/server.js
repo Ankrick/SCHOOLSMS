@@ -5,7 +5,7 @@ const connectDB = require("./config/db");
 const errorHandler = require("./middleware/errorHandler");
 const auth = require("./middleware/auth");
 
-["JWT_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD"].forEach((key) => {
+["JWT_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "STUDENTS_ADMIN_USERNAME", "STUDENTS_ADMIN_PASSWORD"].forEach((key) => {
   if (!process.env[key]) {
     console.error(`Missing required environment variable: ${key}`);
     process.exit(1);
