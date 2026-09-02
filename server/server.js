@@ -4,6 +4,7 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 const errorHandler = require("./middleware/errorHandler");
 const auth = require("./middleware/auth");
+const { requireAdmin, hideMoneyFromNonAdmins } = require("./middleware/roleGuard");
 
 ["JWT_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "STUDENTS_ADMIN_USERNAME", "STUDENTS_ADMIN_PASSWORD"].forEach((key) => {
   if (!process.env[key]) {
@@ -24,14 +25,18 @@ app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 app.use("/api/auth", require("./routes/auth"));
 
-app.use("/api/students", auth, require("./routes/students"));
-app.use("/api/teachers", auth, require("./routes/teachers"));
-app.use("/api/batches", auth, require("./routes/batches"));
-app.use("/api/invoices", auth, require("./routes/invoices"));
-app.use("/api/leads", auth, require("./routes/leads"));
-app.use("/api/settings", auth, require("./routes/settings"));
-app.use("/api/payment-history", auth, require("./routes/paymentHistory"));
-app.use("/api/data", auth, require("./routes/data"));
+// students_admin may reach these two, with every money field stripped from the response.
+// Batch writes are still admin-only — see routes/batches.js.
+app.use("/api/students", auth, hideMoneyFromNonAdmins, require("./routes/students"));
+app.use("/api/batches", auth, hideMoneyFromNonAdmins, require("./routes/batches"));
+
+// Everything financial, plus destructive data management, is admin-only.
+app.use("/api/teachers", auth, requireAdmin, require("./routes/teachers"));
+app.use("/api/invoices", auth, requireAdmin, require("./routes/invoices"));
+app.use("/api/leads", auth, requireAdmin, require("./routes/leads"));
+app.use("/api/settings", auth, requireAdmin, require("./routes/settings"));
+app.use("/api/payment-history", auth, requireAdmin, require("./routes/paymentHistory"));
+app.use("/api/data", auth, requireAdmin, require("./routes/data"));
 
 app.use(errorHandler);
 

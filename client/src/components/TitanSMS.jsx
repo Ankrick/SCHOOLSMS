@@ -25,10 +25,19 @@ const BRAND = {
   border: "#E8E0D4",
 };
 
-const TABS = ["Invoices", "Payment History"];
+// Which tabs each account gets. students_admin is limited to student records and never
+// sees money — the server enforces this too (server/middleware/roleGuard.js); this only
+// decides what to render.
+const TABS_BY_ROLE = {
+  admin: ["Students", "Batches", "Invoices", "Payment History"],
+  students_admin: ["Students"],
+};
+
+const STRIKE_MAX = 3;
+const SUBJECTS = ["Computer Science", "ICT", "Mathematics", "Physics", "Biology", "Chemistry"];
 
 const ICONS = {
-  Invoices: "🧾", "Payment History": "💳",
+  Students: "🎓", Batches: "📚", Invoices: "🧾", "Payment History": "💳",
   search: "🔍", add: "➕", edit: "✏️", trash: "🗑️", check: "✅", x: "❌",
   warning: "⚠️", clock: "🕐", money: "💰", star: "⭐", fire: "🔥",
   send: "📤", eye: "👁️", download: "⬇️", filter: "🔽",
@@ -147,6 +156,510 @@ function EmptyState({ icon, message, action }) {
       <div style={{ marginBottom: 16 }}>{message}</div>
       {action}
     </div>
+  );
+}
+
+function Strikes({ count }) {
+  return (
+    <span style={{ display: "inline-flex", gap: 3 }} title={`${count}/${STRIKE_MAX} strikes`}>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: i < count ? BRAND.red : BRAND.border,
+            display: "inline-block",
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+// ─── STUDENTS ────────────────────────────────────────────────────
+function StudentsPage({ students, batches, isAdmin, onSave, onDelete, onAddStrike, onRemoveStrike }) {
+  const [search, setSearch] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [filterBatch, setFilterBatch] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+
+  const batchesById = useMemo(
+    () => Object.fromEntries(batches.map((b) => [b.id, b])),
+    [batches]
+  );
+
+  const filtered = students.filter((s) => {
+    if (filterBatch !== "all" && s.batchId !== filterBatch) return false;
+    if (filterStatus !== "all" && s.status !== filterStatus) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return (
+        s.name.toLowerCase().includes(q) ||
+        (s.nameBurmese || "").toLowerCase().includes(q) ||
+        (s.email || "").toLowerCase().includes(q) ||
+        (s.phone || "").toLowerCase().includes(q) ||
+        (s.parentName || "").toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
+  async function handleSave(form) {
+    try {
+      await onSave(form);
+      setShowAdd(false);
+      setEditing(null);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  async function handleDelete(id) {
+    if (!confirm("Remove this student?")) return;
+    try {
+      await onDelete(id);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  const activeCount = students.filter((s) => s.status === "Active").length;
+
+  return (
+    <div>
+      <div style={S.pageTitle} className="page-title">Students</div>
+      <div style={S.pageDesc}>Manage enrolled students and their batch placement</div>
+
+      <div style={S.statsRow}>
+        <div style={S.statCard(BRAND.green)}>
+          <div style={S.statNum}>{activeCount}</div>
+          <div style={S.statLabel}>Active Students</div>
+        </div>
+        <div style={S.statCard(BRAND.crimson)}>
+          <div style={S.statNum}>{filtered.length}</div>
+          <div style={S.statLabel}>Shown</div>
+        </div>
+      </div>
+
+      <div style={S.toolbar} className="toolbar">
+        <div style={S.searchBox}>
+          <span style={S.searchIcon}>{ICONS.search}</span>
+          <input style={S.searchInput} placeholder="Search students..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <select style={{ ...S.select, width: "auto", minWidth: 160 }} value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)}>
+          <option value="all">All Batches</option>
+          {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        <select style={{ ...S.select, width: "auto", minWidth: 120 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+          <option value="all">All Status</option>
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+          <option value="Expelled">Expelled</option>
+        </select>
+        <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Student</button>
+      </div>
+
+      <div style={S.card} className="card">
+        {filtered.length === 0 ? (
+          <EmptyState
+            icon="🎓"
+            message="No students found"
+            action={<button style={S.btn("primary")} onClick={() => setShowAdd(true)}>Add First Student</button>}
+          />
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={S.table} className="data-table">
+              <thead>
+                <tr>
+                  <th style={S.th}>Name</th>
+                  <th style={S.th}>Batch</th>
+                  <th style={S.th}>Contact</th>
+                  <th style={S.th}>Parent</th>
+                  <th style={S.th}>Status</th>
+                  <th style={S.th}>Strikes</th>
+                  {isAdmin && <th style={S.th}>Fee</th>}
+                  <th style={S.th}>Enrolled</th>
+                  <th style={S.th}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((s) => {
+                  const batch = batchesById[s.batchId];
+                  return (
+                    <tr
+                      key={s.id}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = BRAND.cream)}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <td style={S.td} data-label="Name">
+                        <div style={{ fontWeight: 600 }}>{s.name}</div>
+                        {s.nameBurmese && <div style={{ fontSize: 12 }}>{s.nameBurmese}</div>}
+                        {s.email && <div style={{ fontSize: 11, color: BRAND.grey }}>{s.email}</div>}
+                      </td>
+                      <td style={S.td} data-label="Batch">
+                        <span style={S.tag}>{batch ? batch.name : "—"}</span>
+                      </td>
+                      <td style={{ ...S.td, fontSize: 12 }} data-label="Contact">
+                        {s.phone || <span style={{ color: BRAND.grey }}>—</span>}
+                        {s.telegram && <div style={{ color: BRAND.grey }}>{s.telegram}</div>}
+                      </td>
+                      <td style={{ ...S.td, fontSize: 12 }} data-label="Parent">
+                        {s.parentName ? (
+                          <div>
+                            <div>{s.parentName}</div>
+                            {s.parentPhone && <div style={{ color: BRAND.grey }}>{s.parentPhone}</div>}
+                          </div>
+                        ) : (
+                          <span style={{ color: BRAND.grey }}>—</span>
+                        )}
+                      </td>
+                      <td style={S.td} data-label="Status"><Badge stage={s.status} /></td>
+                      <td style={S.td} data-label="Strikes">
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <Strikes count={s.strikes} />
+                          <button
+                            style={{ ...S.btn("small"), padding: "2px 6px", fontSize: 10 }}
+                            onClick={() => onAddStrike(s.id).catch((err) => alert(err.message))}
+                            title="Add strike"
+                          >+</button>
+                          {s.strikes > 0 && (
+                            <button
+                              style={{ ...S.btn("small"), padding: "2px 6px", fontSize: 10 }}
+                              onClick={() => onRemoveStrike(s.id).catch((err) => alert(err.message))}
+                              title="Remove strike"
+                            >−</button>
+                          )}
+                        </div>
+                      </td>
+                      {isAdmin && (
+                        <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }} data-label="Fee">
+                          {s.customFee != null ? (
+                            <strong>{fmtMMK(s.customFee)}</strong>
+                          ) : batch ? (
+                            <span style={{ color: BRAND.grey }}>{fmtMMK(batch.fee)}</span>
+                          ) : (
+                            <span style={{ color: BRAND.grey }}>—</span>
+                          )}
+                        </td>
+                      )}
+                      <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }} data-label="Enrolled">
+                        {fmtDate(s.enrolledDate)}
+                      </td>
+                      <td style={S.td} data-label="Actions">
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button style={S.btn("small")} onClick={() => setEditing(s)}>Edit</button>
+                          <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => handleDelete(s.id)}>🗑️</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {(showAdd || editing) && (
+        <StudentForm
+          student={editing}
+          batches={batches}
+          isAdmin={isAdmin}
+          onSave={handleSave}
+          onClose={() => { setShowAdd(false); setEditing(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function StudentForm({ student, batches, isAdmin, onSave, onClose }) {
+  const [form, setForm] = useState(
+    student || {
+      name: "", nameBurmese: "", email: "", phone: "", telegram: "",
+      batchId: batches[0]?.id || "", subject: "Computer Science", status: "Active",
+      strikes: 0, enrolledDate: today(), billingStartDate: "", customFee: null,
+      parentName: "", parentPhone: "", parentFacebook: "", notes: "",
+    }
+  );
+  const [saving, setSaving] = useState(false);
+
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  async function submit() {
+    if (!form.name.trim()) return alert("Name is required");
+    setSaving(true);
+    try {
+      await onSave(form);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={student ? "Edit Student" : "Add Student"} onClose={onClose}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="preview-grid">
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Full Name *</label>
+          <input style={S.input} value={form.name} onChange={(e) => set("name", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Name (Burmese)</label>
+          <input style={S.input} value={form.nameBurmese || ""} onChange={(e) => set("nameBurmese", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Email</label>
+          <input style={S.input} value={form.email || ""} onChange={(e) => set("email", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Phone</label>
+          <input style={S.input} value={form.phone || ""} onChange={(e) => set("phone", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Batch</label>
+          <select style={S.select} value={form.batchId || ""} onChange={(e) => set("batchId", e.target.value)}>
+            <option value="">— No batch —</option>
+            {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Subject</label>
+          <select style={S.select} value={form.subject} onChange={(e) => set("subject", e.target.value)}>
+            {SUBJECTS.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Status</label>
+          <select style={S.select} value={form.status} onChange={(e) => set("status", e.target.value)}>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+            <option value="Expelled">Expelled</option>
+          </select>
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Enrolled Date</label>
+          <input style={S.input} type="date" value={fmtDateInput(form.enrolledDate)} onChange={(e) => set("enrolledDate", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Parent / Guardian</label>
+          <input style={S.input} value={form.parentName || ""} onChange={(e) => set("parentName", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Parent Phone</label>
+          <input style={S.input} value={form.parentPhone || ""} onChange={(e) => set("parentPhone", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Parent Facebook</label>
+          <input style={S.input} value={form.parentFacebook || ""} onChange={(e) => set("parentFacebook", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Telegram</label>
+          <input style={S.input} value={form.telegram || ""} onChange={(e) => set("telegram", e.target.value)} />
+        </div>
+
+        {/* Billing is admin-only — students_admin never sees or sets money. */}
+        {isAdmin && (
+          <>
+            <div style={S.formGroup}>
+              <label style={S.formLabel}>Billing Start Date</label>
+              <input style={S.input} type="date" value={fmtDateInput(form.billingStartDate)} onChange={(e) => set("billingStartDate", e.target.value)} />
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.formLabel}>Custom Fee (MMK)</label>
+              <input
+                style={S.input}
+                type="number"
+                placeholder="Uses batch fee"
+                value={form.customFee ?? ""}
+                onChange={(e) => set("customFee", e.target.value === "" ? null : Number(e.target.value))}
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={S.formGroup}>
+        <label style={S.formLabel}>Notes</label>
+        <textarea style={{ ...S.input, height: 60, resize: "vertical" }} value={form.notes || ""} onChange={(e) => set("notes", e.target.value)} />
+      </div>
+
+      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 12 }}>
+        <button style={S.btn("secondary")} onClick={onClose} disabled={saving}>Cancel</button>
+        <button style={S.btn("primary")} onClick={submit} disabled={saving}>
+          {saving ? "Saving…" : "Save Student"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── BATCHES ─────────────────────────────────────────────────────
+function BatchesPage({ batches, students, onSave, onDelete }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  async function handleSave(form) {
+    try {
+      await onSave(form);
+      setShowAdd(false);
+      setEditing(null);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  async function handleDelete(id) {
+    if (students.some((s) => s.batchId === id)) {
+      return alert("Cannot delete a batch that has enrolled students.");
+    }
+    if (!confirm("Delete this batch?")) return;
+    try {
+      await onDelete(id);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  return (
+    <div>
+      <div style={S.pageTitle} className="page-title">Batches</div>
+      <div style={S.pageDesc}>Manage cohorts, capacity and monthly fees</div>
+
+      <div style={S.toolbar} className="toolbar">
+        <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Batch</button>
+      </div>
+
+      {batches.length === 0 ? (
+        <div style={S.card} className="card">
+          <EmptyState
+            icon="📚"
+            message="No batches yet"
+            action={<button style={S.btn("primary")} onClick={() => setShowAdd(true)}>Add First Batch</button>}
+          />
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+          {batches.map((b) => {
+            const enrolled = students.filter((s) => s.batchId === b.id && s.status === "Active");
+            const pct = b.maxStudents ? Math.round((enrolled.length / b.maxStudents) * 100) : 0;
+            return (
+              <div key={b.id} style={{ ...S.card, marginBottom: 0 }} className="card">
+                <div style={{ ...S.flexBetween, marginBottom: 12, gap: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>{b.name}</div>
+                    <div style={{ fontSize: 12, color: BRAND.grey }}>{b.syllabus} • {b.days}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button style={S.btn("small")} onClick={() => setEditing(b)}>Edit</button>
+                    <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => handleDelete(b.id)}>🗑️</button>
+                  </div>
+                </div>
+
+                <div style={{ ...S.flexBetween, marginBottom: 6 }}>
+                  <span style={{ fontSize: 13 }}>{enrolled.length} / {b.maxStudents} students</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: pct >= 90 ? BRAND.red : BRAND.green }}>{pct}%</span>
+                </div>
+                <div style={{ height: 8, borderRadius: 4, background: BRAND.greyLight, overflow: "hidden", marginBottom: 16 }}>
+                  <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: pct >= 90 ? BRAND.red : pct >= 70 ? BRAND.gold : BRAND.green, borderRadius: 4 }} />
+                </div>
+
+                <div style={{ fontSize: 13, color: BRAND.grey }}>
+                  Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(b.fee)}</strong>/month
+                </div>
+                {b.examDate && (
+                  <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 4 }}>
+                    Exam: {fmtDate(b.examDate)}
+                  </div>
+                )}
+
+                {enrolled.length > 0 && (
+                  <div style={{ marginTop: 12, borderTop: `1px solid ${BRAND.border}`, paddingTop: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: BRAND.grey, marginBottom: 6, textTransform: "uppercase" }}>Enrolled</div>
+                    {enrolled.map((s) => (
+                      <div key={s.id} style={{ fontSize: 12, padding: "3px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{s.name}</span>
+                        <Strikes count={s.strikes} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {(showAdd || editing) && (
+        <BatchForm
+          batch={editing}
+          onSave={handleSave}
+          onClose={() => { setShowAdd(false); setEditing(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function BatchForm({ batch, onSave, onClose }) {
+  const [form, setForm] = useState(
+    batch || { name: "", syllabus: "CIE", days: "", maxStudents: 15, fee: 180000, examDate: "", sessionsPerMonth: 8 }
+  );
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  async function submit() {
+    if (!form.name.trim()) return alert("Name is required");
+    setSaving(true);
+    try {
+      await onSave(form);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={batch ? "Edit Batch" : "Add Batch"} onClose={onClose}>
+      <div style={S.formGroup}>
+        <label style={S.formLabel}>Batch Name *</label>
+        <input style={S.input} value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. CIE 0478 — Sat/Mon" />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="preview-grid">
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Syllabus</label>
+          <select style={S.select} value={form.syllabus} onChange={(e) => set("syllabus", e.target.value)}>
+            <option value="CIE">CIE</option>
+            <option value="Edexcel">Edexcel</option>
+          </select>
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Days</label>
+          <input style={S.input} value={form.days || ""} onChange={(e) => set("days", e.target.value)} placeholder="e.g. Sat & Mon" />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Max Students</label>
+          <input style={S.input} type="number" value={form.maxStudents} onChange={(e) => set("maxStudents", parseInt(e.target.value) || 15)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Monthly Fee (MMK)</label>
+          <input style={S.input} type="number" value={form.fee} onChange={(e) => set("fee", parseInt(e.target.value) || 0)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Exam Date</label>
+          <input style={S.input} type="date" value={fmtDateInput(form.examDate)} onChange={(e) => set("examDate", e.target.value)} />
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Sessions / Month</label>
+          <input style={S.input} type="number" value={form.sessionsPerMonth} onChange={(e) => set("sessionsPerMonth", parseInt(e.target.value) || 8)} />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 12 }}>
+        <button style={S.btn("secondary")} onClick={onClose} disabled={saving}>Cancel</button>
+        <button style={S.btn("primary")} onClick={submit} disabled={saving}>
+          {saving ? "Saving…" : "Save Batch"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -862,7 +1375,10 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
 // ─── MAIN APP ────────────────────────────────────────────────────
 export default function TitanSMS({ onLogout }) {
   const role = api.getRole();
-  const [activeTab, setActiveTab] = useState("Invoices");
+  const isAdmin = role === "admin";
+  // Unknown roles fall back to the most restricted tab set.
+  const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.students_admin;
+  const [activeTab, setActiveTab] = useState(tabs[0]);
   const [data, setData] = useState({ students: [], batches: [], invoices: [], settings: {}, paymentHistory: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -870,6 +1386,12 @@ export default function TitanSMS({ onLogout }) {
   useEffect(() => {
     async function fetchAll() {
       try {
+        if (!isAdmin) {
+          // students_admin: student records only. The financial endpoints would 403.
+          const [students, batches] = await Promise.all([api.getStudents(), api.getBatches()]);
+          setData((prev) => ({ ...prev, students, batches }));
+          return;
+        }
         await api.markInvoicesOverdue();
         const [students, batches, invoices, settings, paymentHistory] = await Promise.all([
           api.getStudents(),
@@ -886,7 +1408,60 @@ export default function TitanSMS({ onLogout }) {
       }
     }
     fetchAll();
-  }, []);
+  }, [isAdmin]);
+
+  // ── Student handlers ──
+  async function handleSaveStudent(form) {
+    if (form.id) {
+      const updated = await api.updateStudent(form.id, form);
+      setData((prev) => ({
+        ...prev,
+        students: prev.students.map((s) => (s.id === updated.id ? updated : s)),
+      }));
+    } else {
+      const created = await api.createStudent(form);
+      setData((prev) => ({ ...prev, students: [...prev.students, created] }));
+    }
+  }
+
+  async function handleDeleteStudent(id) {
+    await api.deleteStudent(id);
+    setData((prev) => ({ ...prev, students: prev.students.filter((s) => s.id !== id) }));
+  }
+
+  function replaceStudent(updated) {
+    setData((prev) => ({
+      ...prev,
+      students: prev.students.map((s) => (s.id === updated.id ? updated : s)),
+    }));
+  }
+
+  async function handleAddStrike(id) {
+    replaceStudent(await api.addStrike(id));
+  }
+
+  async function handleRemoveStrike(id) {
+    replaceStudent(await api.removeStrike(id));
+  }
+
+  // ── Batch handlers ──
+  async function handleSaveBatch(form) {
+    if (form.id) {
+      const updated = await api.updateBatch(form.id, form);
+      setData((prev) => ({
+        ...prev,
+        batches: prev.batches.map((b) => (b.id === updated.id ? updated : b)),
+      }));
+    } else {
+      const created = await api.createBatch(form);
+      setData((prev) => ({ ...prev, batches: [...prev.batches, created] }));
+    }
+  }
+
+  async function handleDeleteBatch(id) {
+    await api.deleteBatch(id);
+    setData((prev) => ({ ...prev, batches: prev.batches.filter((b) => b.id !== id) }));
+  }
 
   // ── Invoice handlers ──
   async function handleMarkPaid(id) {
@@ -951,6 +1526,25 @@ export default function TitanSMS({ onLogout }) {
   }
 
   const pages = {
+    Students: (
+      <StudentsPage
+        students={data.students}
+        batches={data.batches}
+        isAdmin={isAdmin}
+        onSave={handleSaveStudent}
+        onDelete={handleDeleteStudent}
+        onAddStrike={handleAddStrike}
+        onRemoveStrike={handleRemoveStrike}
+      />
+    ),
+    Batches: (
+      <BatchesPage
+        batches={data.batches}
+        students={data.students}
+        onSave={handleSaveBatch}
+        onDelete={handleDeleteBatch}
+      />
+    ),
     Invoices: (
       <InvoicesPage
         invoices={data.invoices}
@@ -1077,7 +1671,7 @@ export default function TitanSMS({ onLogout }) {
             <div style={S.sidebarSub} className="sidebar-sub">Learning Center</div>
           </div>
           <div style={{ flex: 1, paddingTop: 12 }} className="nav-list">
-            {TABS.map((tab) => (
+            {tabs.map((tab) => (
               <div
                 key={tab}
                 style={S.navItem(activeTab === tab)}
@@ -1112,7 +1706,7 @@ export default function TitanSMS({ onLogout }) {
           </div>
         </nav>
         <main style={S.main} className="app-main">
-          {pages[activeTab]}
+          {tabs.includes(activeTab) ? pages[activeTab] : pages[tabs[0]]}
         </main>
       </div>
     </>
