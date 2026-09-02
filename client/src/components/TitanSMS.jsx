@@ -278,7 +278,7 @@ function StudentsPage({ students, batches, isAdmin, onSave, onDelete, onAddStrik
                   <th style={S.th}>Parent</th>
                   <th style={S.th}>Status</th>
                   <th style={S.th}>Strikes</th>
-                  {isAdmin && <th style={S.th}>Fee</th>}
+                  <th style={S.th}>Fee</th>
                   <th style={S.th}>Enrolled</th>
                   <th style={S.th}>Actions</th>
                 </tr>
@@ -332,17 +332,15 @@ function StudentsPage({ students, batches, isAdmin, onSave, onDelete, onAddStrik
                           )}
                         </div>
                       </td>
-                      {isAdmin && (
-                        <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }} data-label="Fee">
-                          {s.customFee != null ? (
-                            <strong>{fmtMMK(s.customFee)}</strong>
-                          ) : batch ? (
-                            <span style={{ color: BRAND.grey }}>{fmtMMK(batch.fee)}</span>
-                          ) : (
-                            <span style={{ color: BRAND.grey }}>—</span>
-                          )}
-                        </td>
-                      )}
+                      <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }} data-label="Fee">
+                        {s.customFee != null ? (
+                          <strong>{fmtMMK(s.customFee)}</strong>
+                        ) : batch ? (
+                          <span style={{ color: BRAND.grey }} title="Batch default">{fmtMMK(batch.fee)}</span>
+                        ) : (
+                          <span style={{ color: BRAND.grey }}>—</span>
+                        )}
+                      </td>
                       <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }} data-label="Enrolled">
                         {fmtDate(s.enrolledDate)}
                       </td>
@@ -458,24 +456,22 @@ function StudentForm({ student, batches, isAdmin, onSave, onClose }) {
           <input style={S.input} value={form.telegram || ""} onChange={(e) => set("telegram", e.target.value)} />
         </div>
 
-        {/* Billing is admin-only — students_admin never sees or sets money. */}
+        {/* Both roles set the class fee. When the invoicing schedule itself is admin-only. */}
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Class Fee (MMK)</label>
+          <input
+            style={S.input}
+            type="number"
+            placeholder="Leave blank to use the batch fee"
+            value={form.customFee ?? ""}
+            onChange={(e) => set("customFee", e.target.value === "" ? null : Number(e.target.value))}
+          />
+        </div>
         {isAdmin && (
-          <>
-            <div style={S.formGroup}>
-              <label style={S.formLabel}>Billing Start Date</label>
-              <input style={S.input} type="date" value={fmtDateInput(form.billingStartDate)} onChange={(e) => set("billingStartDate", e.target.value)} />
-            </div>
-            <div style={S.formGroup}>
-              <label style={S.formLabel}>Custom Fee (MMK)</label>
-              <input
-                style={S.input}
-                type="number"
-                placeholder="Uses batch fee"
-                value={form.customFee ?? ""}
-                onChange={(e) => set("customFee", e.target.value === "" ? null : Number(e.target.value))}
-              />
-            </div>
-          </>
+          <div style={S.formGroup}>
+            <label style={S.formLabel}>Billing Start Date</label>
+            <input style={S.input} type="date" value={fmtDateInput(form.billingStartDate)} onChange={(e) => set("billingStartDate", e.target.value)} />
+          </div>
         )}
       </div>
 
@@ -495,9 +491,8 @@ function StudentForm({ student, batches, isAdmin, onSave, onClose }) {
 }
 
 // ─── BATCHES ─────────────────────────────────────────────────────
-// students_admin gets this page read-only: no fees (the server strips them), and no
-// create/edit/delete — those are admin-only routes that would just 403.
-function BatchesPage({ batches, students, isAdmin, onSave, onDelete }) {
+// Both roles manage batches, fee included.
+function BatchesPage({ batches, students, onSave, onDelete }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
 
@@ -526,22 +521,18 @@ function BatchesPage({ batches, students, isAdmin, onSave, onDelete }) {
   return (
     <div>
       <div style={S.pageTitle} className="page-title">Batches</div>
-      <div style={S.pageDesc}>
-        {isAdmin ? "Manage cohorts, capacity and monthly fees" : "Cohorts and who is enrolled in each"}
-      </div>
+      <div style={S.pageDesc}>Manage cohorts, capacity and monthly fees</div>
 
-      {isAdmin && (
-        <div style={S.toolbar} className="toolbar">
-          <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Batch</button>
-        </div>
-      )}
+      <div style={S.toolbar} className="toolbar">
+        <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Batch</button>
+      </div>
 
       {batches.length === 0 ? (
         <div style={S.card} className="card">
           <EmptyState
             icon="📚"
             message="No batches yet"
-            action={isAdmin ? <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>Add First Batch</button> : null}
+            action={<button style={S.btn("primary")} onClick={() => setShowAdd(true)}>Add First Batch</button>}
           />
         </div>
       ) : (
@@ -556,12 +547,10 @@ function BatchesPage({ batches, students, isAdmin, onSave, onDelete }) {
                     <div style={{ fontWeight: 700, fontSize: 16 }}>{b.name}</div>
                     <div style={{ fontSize: 12, color: BRAND.grey }}>{b.syllabus} • {b.days}</div>
                   </div>
-                  {isAdmin && (
-                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                      <button style={S.btn("small")} onClick={() => setEditing(b)}>Edit</button>
-                      <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => handleDelete(b.id)}>🗑️</button>
-                    </div>
-                  )}
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button style={S.btn("small")} onClick={() => setEditing(b)}>Edit</button>
+                    <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => handleDelete(b.id)}>🗑️</button>
+                  </div>
                 </div>
 
                 <div style={{ ...S.flexBetween, marginBottom: 6 }}>
@@ -572,11 +561,9 @@ function BatchesPage({ batches, students, isAdmin, onSave, onDelete }) {
                   <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: pct >= 90 ? BRAND.red : pct >= 70 ? BRAND.gold : BRAND.green, borderRadius: 4 }} />
                 </div>
 
-                {isAdmin && (
-                  <div style={{ fontSize: 13, color: BRAND.grey }}>
-                    Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(b.fee)}</strong>/month
-                  </div>
-                )}
+                <div style={{ fontSize: 13, color: BRAND.grey }}>
+                  Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(b.fee)}</strong>/month
+                </div>
                 {b.examDate && (
                   <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 4 }}>
                     Exam: {fmtDate(b.examDate)}
@@ -1551,7 +1538,6 @@ export default function TitanSMS({ onLogout }) {
       <BatchesPage
         batches={data.batches}
         students={data.students}
-        isAdmin={isAdmin}
         onSave={handleSaveBatch}
         onDelete={handleDeleteBatch}
       />
