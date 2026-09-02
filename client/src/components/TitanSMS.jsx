@@ -30,7 +30,7 @@ const BRAND = {
 // decides what to render.
 const TABS_BY_ROLE = {
   admin: ["Students", "Batches", "Invoices", "Payment History"],
-  students_admin: ["Students"],
+  students_admin: ["Students", "Batches"],
 };
 
 const STRIKE_MAX = 3;
@@ -495,7 +495,9 @@ function StudentForm({ student, batches, isAdmin, onSave, onClose }) {
 }
 
 // ─── BATCHES ─────────────────────────────────────────────────────
-function BatchesPage({ batches, students, onSave, onDelete }) {
+// students_admin gets this page read-only: no fees (the server strips them), and no
+// create/edit/delete — those are admin-only routes that would just 403.
+function BatchesPage({ batches, students, isAdmin, onSave, onDelete }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
 
@@ -524,18 +526,22 @@ function BatchesPage({ batches, students, onSave, onDelete }) {
   return (
     <div>
       <div style={S.pageTitle} className="page-title">Batches</div>
-      <div style={S.pageDesc}>Manage cohorts, capacity and monthly fees</div>
-
-      <div style={S.toolbar} className="toolbar">
-        <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Batch</button>
+      <div style={S.pageDesc}>
+        {isAdmin ? "Manage cohorts, capacity and monthly fees" : "Cohorts and who is enrolled in each"}
       </div>
+
+      {isAdmin && (
+        <div style={S.toolbar} className="toolbar">
+          <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Batch</button>
+        </div>
+      )}
 
       {batches.length === 0 ? (
         <div style={S.card} className="card">
           <EmptyState
             icon="📚"
             message="No batches yet"
-            action={<button style={S.btn("primary")} onClick={() => setShowAdd(true)}>Add First Batch</button>}
+            action={isAdmin ? <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>Add First Batch</button> : null}
           />
         </div>
       ) : (
@@ -550,10 +556,12 @@ function BatchesPage({ batches, students, onSave, onDelete }) {
                     <div style={{ fontWeight: 700, fontSize: 16 }}>{b.name}</div>
                     <div style={{ fontSize: 12, color: BRAND.grey }}>{b.syllabus} • {b.days}</div>
                   </div>
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    <button style={S.btn("small")} onClick={() => setEditing(b)}>Edit</button>
-                    <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => handleDelete(b.id)}>🗑️</button>
-                  </div>
+                  {isAdmin && (
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button style={S.btn("small")} onClick={() => setEditing(b)}>Edit</button>
+                      <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => handleDelete(b.id)}>🗑️</button>
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ ...S.flexBetween, marginBottom: 6 }}>
@@ -564,9 +572,11 @@ function BatchesPage({ batches, students, onSave, onDelete }) {
                   <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: pct >= 90 ? BRAND.red : pct >= 70 ? BRAND.gold : BRAND.green, borderRadius: 4 }} />
                 </div>
 
-                <div style={{ fontSize: 13, color: BRAND.grey }}>
-                  Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(b.fee)}</strong>/month
-                </div>
+                {isAdmin && (
+                  <div style={{ fontSize: 13, color: BRAND.grey }}>
+                    Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(b.fee)}</strong>/month
+                  </div>
+                )}
                 {b.examDate && (
                   <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 4 }}>
                     Exam: {fmtDate(b.examDate)}
@@ -1541,6 +1551,7 @@ export default function TitanSMS({ onLogout }) {
       <BatchesPage
         batches={data.batches}
         students={data.students}
+        isAdmin={isAdmin}
         onSave={handleSaveBatch}
         onDelete={handleDeleteBatch}
       />
