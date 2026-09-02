@@ -3,7 +3,7 @@ import axios from "axios";
 // In dev, requests hit the Vite proxy (see vite.config.js) so "/api" is enough.
 // In production the frontend and backend are usually on different hosts,
 // so set VITE_API_URL to the deployed backend's full API URL (e.g. https://api.example.com/api).
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api" });
+const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || "/api", timeout: 20000 });
 
 const TOKEN_KEY = "titan_sms_token";
 const ROLE_KEY = "titan_sms_role";
@@ -37,7 +37,9 @@ api.interceptors.response.use(
 
 const handle = (res) => res.data;
 const err = (e) => {
-  throw new Error(e.response?.data?.message || e.message);
+  if (e.response) throw new Error(e.response.data?.message || e.message);
+  if (e.code === "ECONNABORTED") throw new Error("Request timed out. Check your internet connection and try again.");
+  throw new Error("Could not reach the server. Check your internet connection, or the server may be temporarily unavailable.");
 };
 
 // Auth

@@ -18,7 +18,7 @@ const inputStyle = {
   padding: "10px 12px",
   border: `1px solid ${BRAND.border}`,
   borderRadius: 6,
-  fontSize: 14,
+  fontSize: 16,
   boxSizing: "border-box",
   fontFamily: "inherit",
 };
@@ -52,6 +52,8 @@ export default function Login({ onSuccess }) {
         justifyContent: "center",
         background: BRAND.cream,
         fontFamily: "'Crimson Pro', 'Georgia', serif",
+        padding: 16,
+        boxSizing: "border-box",
       }}
     >
       <form
@@ -61,7 +63,9 @@ export default function Login({ onSuccess }) {
           border: `1px solid ${BRAND.border}`,
           borderRadius: 10,
           padding: "36px 32px",
-          width: 340,
+          width: "100%",
+          maxWidth: 340,
+          boxSizing: "border-box",
           boxShadow: "0 4px 24px rgba(0,0,0,0.08)",
         }}
       >

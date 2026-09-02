@@ -119,7 +119,7 @@ const S = {
 function Modal({ title, onClose, children }) {
   return (
     <div style={S.modal} onClick={onClose}>
-      <div style={S.modalContent} onClick={(e) => e.stopPropagation()}>
+      <div style={S.modalContent} className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div style={{ ...S.flexBetween, marginBottom: 8 }}>
           <div style={S.modalTitle}>{title}</div>
           <button style={S.btn("ghost")} onClick={onClose}>✕</button>
@@ -293,10 +293,10 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
 
   return (
     <div>
-      <div style={S.pageTitle}>Invoices</div>
+      <div style={S.pageTitle} className="page-title">Invoices</div>
       <div style={S.pageDesc}>Auto-generated monthly invoices — minimal manual work</div>
 
-      <div style={S.toolbar}>
+      <div style={S.toolbar} className="toolbar">
         <div style={S.searchBox}>
           <span style={S.searchIcon}>{ICONS.search}</span>
           <input style={S.searchInput} placeholder="Search invoices..." value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -307,7 +307,7 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
           <option value="Paid">Paid</option>
           <option value="Overdue">Overdue</option>
         </select>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }} className="date-filter-row">
           <span style={{ fontSize: 12, color: BRAND.grey, whiteSpace: "nowrap" }}>Due:</span>
           <input
             style={{ ...S.input, width: 140, fontSize: 13 }}
@@ -344,12 +344,12 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
         </div>
       )}
 
-      <div style={S.card}>
+      <div style={S.card} className="card">
         {filtered.length === 0 ? (
           <EmptyState icon="🧾" message="No invoices yet" action={<button style={S.btn("gold")} onClick={() => setShowGenerate(true)}>Generate Invoices</button>} />
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={S.table}>
+            <table style={S.table} className="data-table">
               <thead>
                 <tr>
                   <th style={{ ...S.th, width: 36, paddingRight: 4 }}>
@@ -394,9 +394,9 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                         style={{ cursor: "pointer", width: 15, height: 15 }}
                       />
                     </td>
-                    <td style={{ ...S.td, fontWeight: 600, fontFamily: "monospace" }}>{inv.invoiceNumber}</td>
-                    <td style={S.td}>{inv.studentName}</td>
-                    <td style={S.td}>
+                    <td style={{ ...S.td, fontWeight: 600, fontFamily: "monospace" }} data-label="Invoice #">{inv.invoiceNumber}</td>
+                    <td style={S.td} data-label="Student">{inv.studentName}</td>
+                    <td style={S.td} data-label="Parent">
                       {(() => {
                         const parent = studentsById[inv.studentId];
                         if (!parent || !parent.parentName) return <span style={{ color: BRAND.grey }}>—</span>;
@@ -410,14 +410,14 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                         );
                       })()}
                     </td>
-                    <td style={S.td}><span style={S.tag}>{inv.batchName}</span></td>
-                    <td style={S.td} style={{ whiteSpace: "nowrap", fontSize: 12 }}>
+                    <td style={S.td} data-label="Batch"><span style={S.tag}>{inv.batchName}</span></td>
+                    <td style={{ ...S.td, whiteSpace: "nowrap", fontSize: 12 }} data-label="Period">
                       {inv.periodStart ? fmtPeriod(inv.periodStart, inv.periodEnd) : inv.monthKey}
                     </td>
-                    <td style={S.td}>{fmtMMK(inv.amount)}</td>
-                    <td style={S.td}><Badge stage={inv.status} /></td>
-                    <td style={S.td}>{fmtDate(inv.dueDate)}</td>
-                    <td style={S.td}>
+                    <td style={S.td} data-label="Amount">{fmtMMK(inv.amount)}</td>
+                    <td style={S.td} data-label="Status"><Badge stage={inv.status} /></td>
+                    <td style={S.td} data-label="Due Date">{fmtDate(inv.dueDate)}</td>
+                    <td style={S.td} data-label="Actions">
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setPreview(inv)} title="Preview">👁️</button>
                         {(inv.status === "Unpaid" || inv.status === "Overdue") && (
@@ -491,7 +491,7 @@ function InvoicePreview({ invoice, settings }) {
 
   return (
     <div>
-    <div ref={previewRef} style={S.invoicePreview}>
+    <div ref={previewRef} style={S.invoicePreview} className="invoice-preview">
       <div style={{ ...S.flexBetween, marginBottom: 24 }}>
         <div>
           <div style={{ fontSize: 22, fontWeight: 700, color: BRAND.crimson }}>TITAN</div>
@@ -504,7 +504,7 @@ function InvoicePreview({ invoice, settings }) {
       </div>
 
       <div style={{ borderTop: `2px solid ${BRAND.crimson}`, paddingTop: 16, marginBottom: 20 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, fontSize: 13 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, fontSize: 13 }} className="preview-grid">
           <div>
             <div style={{ fontWeight: 600, marginBottom: 4, color: BRAND.grey, fontSize: 11, textTransform: "uppercase" }}>Bill To</div>
             <div style={{ fontWeight: 600 }}>{invoice.studentName}</div>
@@ -601,7 +601,7 @@ function ReceiptPreview({ payment: ph }) {
 
   return (
     <div>
-      <div ref={receiptRef} style={S.invoicePreview}>
+      <div ref={receiptRef} style={S.invoicePreview} className="invoice-preview">
         {/* Header */}
         <div style={{ ...S.flexBetween, marginBottom: 24 }}>
           <div>
@@ -616,7 +616,7 @@ function ReceiptPreview({ payment: ph }) {
 
         {/* Bill To + Dates */}
         <div style={{ borderTop: `2px solid ${BRAND.crimson}`, paddingTop: 16, marginBottom: 20 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, fontSize: 13 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, fontSize: 13 }} className="preview-grid">
             <div>
               <div style={{ fontWeight: 600, marginBottom: 4, color: BRAND.grey, fontSize: 11, textTransform: "uppercase" }}>Received From</div>
               <div style={{ fontWeight: 600 }}>{ph.studentName}</div>
@@ -726,7 +726,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
 
   return (
     <div>
-      <div style={S.pageTitle}>Payment History</div>
+      <div style={S.pageTitle} className="page-title">Payment History</div>
       <div style={S.pageDesc}>Record of every received payment — invoices removed after payment</div>
 
       <div style={S.statsRow}>
@@ -740,7 +740,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
         </div>
       </div>
 
-      <div style={S.toolbar}>
+      <div style={S.toolbar} className="toolbar">
         <div style={S.searchBox}>
           <span style={S.searchIcon}>{ICONS.search}</span>
           <input style={S.searchInput} placeholder="Search by student name or invoice #..." value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -749,7 +749,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
           <option value="all">All Batches</option>
           {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }} className="date-filter-row">
           <span style={{ fontSize: 12, color: BRAND.grey, whiteSpace: "nowrap" }}>Paid:</span>
           <input style={{ ...S.input, width: 140, fontSize: 13 }} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="From" />
           <span style={{ fontSize: 12, color: BRAND.grey }}>–</span>
@@ -760,12 +760,12 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
         </div>
       </div>
 
-      <div style={S.card}>
+      <div style={S.card} className="card">
         {filtered.length === 0 ? (
           <EmptyState icon="💳" message="No payment records yet. Payments appear here when invoices are marked as paid." />
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={S.table}>
+            <table style={S.table} className="data-table">
               <thead>
                 <tr>
                   <th style={S.th}>Student</th>
@@ -781,18 +781,18 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
               <tbody>
                 {filtered.map((ph) => (
                   <tr key={ph.id} onMouseEnter={(e) => e.currentTarget.style.background = BRAND.cream} onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
-                    <td style={S.td}>
+                    <td style={S.td} data-label="Student">
                       <div style={{ fontWeight: 600 }}>{ph.studentName}</div>
                       {ph.nameBurmese && <div style={{ fontSize: 12, color: BRAND.charcoal }}>{ph.nameBurmese}</div>}
                       <div style={{ fontSize: 11, color: BRAND.grey }}>{ph.studentEmail}</div>
                     </td>
-                    <td style={S.td}><span style={S.tag}>{ph.batchName}</span></td>
-                    <td style={{ ...S.td, fontFamily: "monospace", fontSize: 12 }}>{ph.invoiceNumber}</td>
-                    <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }}>
+                    <td style={S.td} data-label="Batch"><span style={S.tag}>{ph.batchName}</span></td>
+                    <td style={{ ...S.td, fontFamily: "monospace", fontSize: 12 }} data-label="Invoice #">{ph.invoiceNumber}</td>
+                    <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }} data-label="Period">
                       {ph.periodStart ? fmtPeriod(ph.periodStart, ph.periodEnd) : "—"}
                     </td>
-                    <td style={{ ...S.td, fontWeight: 700, color: BRAND.green }}>{fmtMMK(ph.amount)}</td>
-                    <td style={S.td}>
+                    <td style={{ ...S.td, fontWeight: 700, color: BRAND.green }} data-label="Amount">{fmtMMK(ph.amount)}</td>
+                    <td style={S.td} data-label="Paid Date">
                       {editingId === ph.id ? (
                         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                           <input
@@ -825,10 +825,10 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
                         </div>
                       )}
                     </td>
-                    <td style={S.td}>
+                    <td style={S.td} data-label="Payment #">
                       <span style={S.badge(BRAND.crimson, BRAND.redLight)}>#{ph.paymentCount}</span>
                     </td>
-                    <td style={S.td}>
+                    <td style={S.td} data-label="Actions">
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setReceipt(ph)} title="Generate Receipt">🧾 Receipt</button>
                         <button
@@ -983,29 +983,121 @@ export default function TitanSMS({ onLogout }) {
         button:hover { opacity: 0.9; }
         input:focus, select:focus, textarea:focus { outline: none; border-color: ${BRAND.gold}; box-shadow: 0 0 0 2px ${BRAND.gold}33; }
         tr { transition: background 0.15s; }
+
+        /* ─── Responsive / mobile ─────────────────────────────── */
+        @media (max-width: 768px) {
+          /* Prevent iOS Safari from zooming in when a field is focused */
+          input, select, textarea { font-size: 16px !important; }
+
+          .app-shell { flex-direction: column !important; }
+
+          .app-sidebar {
+            width: 100% !important;
+            height: auto !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            z-index: 100;
+          }
+          .sidebar-header { padding: 10px 14px !important; border-bottom: none !important; }
+          .sidebar-sub, .sidebar-version { display: none !important; }
+          .nav-list {
+            flex: 1 !important;
+            padding-top: 0 !important;
+            display: flex !important;
+            flex-direction: row !important;
+            overflow-x: auto !important;
+          }
+          .nav-item {
+            padding: 14px 16px !important;
+            border-left: none !important;
+            border-bottom: 3px solid transparent !important;
+            white-space: nowrap;
+          }
+          .nav-item-active { border-bottom-color: ${BRAND.gold} !important; }
+          .sidebar-footer {
+            border-top: none !important;
+            padding: 8px 10px !important;
+            display: flex !important;
+            align-items: center !important;
+          }
+          .sidebar-role { display: none !important; }
+          .logout-btn { width: auto !important; padding: 8px 10px !important; white-space: nowrap; }
+
+          .app-main { padding: 16px !important; max-width: 100% !important; }
+          .page-title { font-size: 22px !important; }
+          .card { padding: 14px !important; }
+          .modal-content { padding: 18px !important; width: 92% !important; }
+
+          .toolbar { flex-direction: column !important; align-items: stretch !important; }
+          .toolbar > * { width: 100% !important; flex: 0 0 auto !important; }
+          .date-filter-row { flex-wrap: wrap; }
+
+          .invoice-preview { padding: 18px !important; }
+          .preview-grid { grid-template-columns: 1fr !important; text-align: left !important; }
+          .preview-grid > div:last-child { text-align: left !important; margin-top: 8px; }
+        }
+
+        @media (max-width: 640px) {
+          /* Data tables reflow into stacked cards — each cell becomes a labeled row */
+          .data-table thead { display: none; }
+          .data-table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; }
+          .data-table tr {
+            margin-bottom: 12px;
+            border: 1px solid ${BRAND.border};
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: ${BRAND.white} !important;
+          }
+          .data-table td {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 2px !important;
+            border-bottom: 1px dashed ${BRAND.border} !important;
+            text-align: right;
+          }
+          .data-table tr td:last-child { border-bottom: none !important; }
+          .data-table td[data-label]::before {
+            content: attr(data-label);
+            font-weight: 600;
+            color: ${BRAND.grey};
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            text-align: left;
+            flex-shrink: 0;
+          }
+        }
       `}</style>
-      <div style={S.app}>
-        <nav style={S.sidebar}>
-          <div style={S.sidebarHeader}>
+      <div style={S.app} className="app-shell">
+        <nav style={S.sidebar} className="app-sidebar">
+          <div style={S.sidebarHeader} className="sidebar-header">
             <div style={S.sidebarLogo}>TITAN</div>
-            <div style={S.sidebarSub}>Learning Center</div>
+            <div style={S.sidebarSub} className="sidebar-sub">Learning Center</div>
           </div>
-          <div style={{ flex: 1, paddingTop: 12 }}>
+          <div style={{ flex: 1, paddingTop: 12 }} className="nav-list">
             {TABS.map((tab) => (
-              <div key={tab} style={S.navItem(activeTab === tab)} onClick={() => setActiveTab(tab)}>
+              <div
+                key={tab}
+                style={S.navItem(activeTab === tab)}
+                className={`nav-item${activeTab === tab ? " nav-item-active" : ""}`}
+                onClick={() => setActiveTab(tab)}
+              >
                 <span>{ICONS[tab]}</span>
                 <span>{tab}</span>
               </div>
             ))}
           </div>
-          <div style={{ padding: "12px 20px", borderTop: `1px solid ${BRAND.charcoalLight}` }}>
+          <div style={{ padding: "12px 20px", borderTop: `1px solid ${BRAND.charcoalLight}` }} className="sidebar-footer">
             {role && (
-              <div style={{ fontSize: 11, color: BRAND.grey, marginBottom: 8, textTransform: "capitalize" }}>
+              <div style={{ fontSize: 11, color: BRAND.grey, marginBottom: 8, textTransform: "capitalize" }} className="sidebar-role">
                 Signed in as {role.replace("_", " ")}
               </div>
             )}
             <button
               onClick={onLogout}
+              className="logout-btn"
               style={{
                 width: "100%", padding: "8px 12px", background: "transparent",
                 color: BRAND.grey, border: `1px solid ${BRAND.charcoalLight}`, borderRadius: 6,
@@ -1015,11 +1107,11 @@ export default function TitanSMS({ onLogout }) {
               Log out
             </button>
           </div>
-          <div style={{ padding: "12px 20px 16px", fontSize: 11, color: BRAND.grey }}>
+          <div style={{ padding: "12px 20px 16px", fontSize: 11, color: BRAND.grey }} className="sidebar-version">
             v2.0 MERN — Understanding over Memorization
           </div>
         </nav>
-        <main style={S.main}>
+        <main style={S.main} className="app-main">
           {pages[activeTab]}
         </main>
       </div>

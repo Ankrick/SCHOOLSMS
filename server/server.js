@@ -19,6 +19,9 @@ connectDB();
 app.use(cors());
 app.use(express.json());
 
+// Lightweight endpoint for uptime pingers — keeps a free-tier host from spinning down idle.
+app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
+
 app.use("/api/auth", require("./routes/auth"));
 
 app.use("/api/students", auth, require("./routes/students"));
