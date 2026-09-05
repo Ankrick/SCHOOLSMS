@@ -4,7 +4,7 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 const errorHandler = require("./middleware/errorHandler");
 const auth = require("./middleware/auth");
-const { requireAdmin } = require("./middleware/roleGuard");
+const { requireRole, MANAGE_FINANCE } = require("./middleware/roleGuard");
 
 ["JWT_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "STUDENTS_ADMIN_USERNAME", "STUDENTS_ADMIN_PASSWORD"].forEach((key) => {
   if (!process.env[key]) {
@@ -12,6 +12,12 @@ const { requireAdmin } = require("./middleware/roleGuard");
     process.exit(1);
   }
 });
+
+// The owner account is optional on purpose: a missing value here disables that one login
+// instead of taking the whole server down on a deploy where it wasn't set yet.
+if (!process.env.OWNER_USERNAME || !process.env.OWNER_PASSWORD) {
+  console.warn("OWNER_USERNAME / OWNER_PASSWORD not set — the owner login is disabled.");
+}
 
 const app = express();
 
@@ -25,19 +31,23 @@ app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 app.use("/api/auth", require("./routes/auth"));
 
-// Both accounts manage students and batches, including the fee on each — students_admin
-// sets class fees when adding students or setting up batches.
+// Any signed-in account may READ students and batches — the invoice screens need student
+// and batch names to render. Writing them is owner/students_admin only, enforced per-verb
+// inside these two routers.
 app.use("/api/students", auth, require("./routes/students"));
 app.use("/api/batches", auth, require("./routes/batches"));
 
-// Billing records and revenue — what has actually been invoiced and collected — plus
-// destructive data management stay admin-only.
-app.use("/api/teachers", auth, requireAdmin, require("./routes/teachers"));
-app.use("/api/invoices", auth, requireAdmin, require("./routes/invoices"));
-app.use("/api/leads", auth, requireAdmin, require("./routes/leads"));
-app.use("/api/settings", auth, requireAdmin, require("./routes/settings"));
-app.use("/api/payment-history", auth, requireAdmin, require("./routes/paymentHistory"));
-app.use("/api/data", auth, requireAdmin, require("./routes/data"));
+// Billing records — what has been invoiced and collected: owner and admin.
+app.use("/api/invoices", auth, requireRole(...MANAGE_FINANCE), require("./routes/invoices"));
+app.use("/api/payment-history", auth, requireRole(...MANAGE_FINANCE), require("./routes/paymentHistory"));
+// Settings: admin reads them (invoice previews use the prefix and currency); only the
+// owner changes them — enforced per-verb inside the router.
+app.use("/api/settings", auth, requireRole(...MANAGE_FINANCE), require("./routes/settings"));
+
+// Payroll, the sales pipeline and destructive data management are the owner's alone.
+app.use("/api/teachers", auth, requireRole("owner"), require("./routes/teachers"));
+app.use("/api/leads", auth, requireRole("owner"), require("./routes/leads"));
+app.use("/api/data", auth, requireRole("owner"), require("./routes/data"));
 
 app.use(errorHandler);
 

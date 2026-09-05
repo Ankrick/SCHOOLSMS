@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import TitanSMS from "./components/TitanSMS";
+import OwnerSMS from "./components/OwnerSMS";
 import Login from "./components/Login";
-import { getToken, logout } from "./api";
+import { getToken, getRole, logout } from "./api";
 
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken());
@@ -16,5 +17,10 @@ export default function App() {
     return <Login onSuccess={() => setAuthed(true)} />;
   }
 
-  return <TitanSMS onLogout={() => { logout(); setAuthed(false); }} />;
+  const handleLogout = () => { logout(); setAuthed(false); };
+
+  // The owner gets the full console; admin and students_admin get the role-scoped one.
+  if (getRole() === "owner") return <OwnerSMS onLogout={handleLogout} />;
+
+  return <TitanSMS onLogout={handleLogout} />;
 }

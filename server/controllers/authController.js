@@ -15,6 +15,10 @@ function safeEqual(a, b) {
 
 function getAccounts() {
   return [
+    // Owner sees everything. Optional: with OWNER_USERNAME/OWNER_PASSWORD unset, safeEqual
+    // compares against "" and login already rejects empty credentials, so the account
+    // simply never matches rather than the server refusing to start.
+    { role: "owner", username: process.env.OWNER_USERNAME, password: process.env.OWNER_PASSWORD },
     { role: "admin", username: process.env.ADMIN_USERNAME, password: process.env.ADMIN_PASSWORD },
     {
       role: "students_admin",

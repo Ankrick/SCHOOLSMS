@@ -25,13 +25,19 @@ const BRAND = {
   border: "#E8E0D4",
 };
 
-// Which tabs each account gets. students_admin is limited to student records and never
-// sees money — the server enforces this too (server/middleware/roleGuard.js); this only
-// decides what to render.
+// Tabs for the two scoped accounts. The owner gets the full console instead — see
+// OwnerSMS.jsx, picked in App.jsx. The server enforces this split as well
+// (server/middleware/roleGuard.js); this only decides what to render.
+//   admin          — finance only.
+//   students_admin — student records and batches.
 const TABS_BY_ROLE = {
-  admin: ["Students", "Batches", "Invoices", "Payment History"],
+  admin: ["Invoices", "Payment History"],
   students_admin: ["Students", "Batches"],
 };
+
+// Roles whose data load includes invoices, payments and revenue. Everyone else would get
+// a 403 from those endpoints. Students and batches are readable by every role.
+const CAN_SEE_FINANCE = ["owner", "admin"];
 
 const STRIKE_MAX = 3;
 const SUBJECTS = ["Computer Science", "ICT", "Mathematics", "Physics", "Biology", "Chemistry"];
@@ -141,9 +147,13 @@ function Modal({ title, onClose, children }) {
 
 function Badge({ stage }) {
   const map = {
+    // Invoices
     Paid: [BRAND.green, BRAND.greenLight],
     Unpaid: [BRAND.red, BRAND.redLight],
     Overdue: [BRAND.orange, BRAND.orangeLight],
+    // Students
+    Active: [BRAND.green, BRAND.greenLight],
+    Expelled: [BRAND.red, BRAND.redLight],
   };
   const [c, bg] = map[stage] || [BRAND.grey, BRAND.greyLight];
   return <span style={S.badge(c, bg)}>{stage}</span>;
@@ -177,7 +187,7 @@ function Strikes({ count }) {
 }
 
 // ─── STUDENTS ────────────────────────────────────────────────────
-function StudentsPage({ students, batches, isAdmin, onSave, onDelete, onAddStrike, onRemoveStrike }) {
+function StudentsPage({ students, batches, onSave, onDelete, onAddStrike, onRemoveStrike }) {
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -363,7 +373,6 @@ function StudentsPage({ students, batches, isAdmin, onSave, onDelete, onAddStrik
         <StudentForm
           student={editing}
           batches={batches}
-          isAdmin={isAdmin}
           onSave={handleSave}
           onClose={() => { setShowAdd(false); setEditing(null); }}
         />
@@ -372,7 +381,7 @@ function StudentsPage({ students, batches, isAdmin, onSave, onDelete, onAddStrik
   );
 }
 
-function StudentForm({ student, batches, isAdmin, onSave, onClose }) {
+function StudentForm({ student, batches, onSave, onClose }) {
   const [form, setForm] = useState(
     student || {
       name: "", nameBurmese: "", email: "", phone: "", telegram: "",
@@ -456,7 +465,6 @@ function StudentForm({ student, batches, isAdmin, onSave, onClose }) {
           <input style={S.input} value={form.telegram || ""} onChange={(e) => set("telegram", e.target.value)} />
         </div>
 
-        {/* Both roles set the class fee. When the invoicing schedule itself is admin-only. */}
         <div style={S.formGroup}>
           <label style={S.formLabel}>Class Fee (MMK)</label>
           <input
@@ -467,12 +475,10 @@ function StudentForm({ student, batches, isAdmin, onSave, onClose }) {
             onChange={(e) => set("customFee", e.target.value === "" ? null : Number(e.target.value))}
           />
         </div>
-        {isAdmin && (
-          <div style={S.formGroup}>
-            <label style={S.formLabel}>Billing Start Date</label>
-            <input style={S.input} type="date" value={fmtDateInput(form.billingStartDate)} onChange={(e) => set("billingStartDate", e.target.value)} />
-          </div>
-        )}
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Billing Start Date</label>
+          <input style={S.input} type="date" value={fmtDateInput(form.billingStartDate)} onChange={(e) => set("billingStartDate", e.target.value)} />
+        </div>
       </div>
 
       <div style={S.formGroup}>
@@ -1372,7 +1378,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
 // ─── MAIN APP ────────────────────────────────────────────────────
 export default function TitanSMS({ onLogout }) {
   const role = api.getRole();
-  const isAdmin = role === "admin";
+  const canSeeFinance = CAN_SEE_FINANCE.includes(role);
   // Unknown roles fall back to the most restricted tab set.
   const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.students_admin;
   const [activeTab, setActiveTab] = useState(tabs[0]);
@@ -1383,8 +1389,9 @@ export default function TitanSMS({ onLogout }) {
   useEffect(() => {
     async function fetchAll() {
       try {
-        if (!isAdmin) {
-          // students_admin: student records only. The financial endpoints would 403.
+        // Every role reads students and batches; the invoice screens need their names.
+        if (!canSeeFinance) {
+          // students_admin: the billing endpoints would 403.
           const [students, batches] = await Promise.all([api.getStudents(), api.getBatches()]);
           setData((prev) => ({ ...prev, students, batches }));
           return;
@@ -1405,7 +1412,7 @@ export default function TitanSMS({ onLogout }) {
       }
     }
     fetchAll();
-  }, [isAdmin]);
+  }, [canSeeFinance]);
 
   // ── Student handlers ──
   async function handleSaveStudent(form) {
@@ -1527,7 +1534,6 @@ export default function TitanSMS({ onLogout }) {
       <StudentsPage
         students={data.students}
         batches={data.batches}
-        isAdmin={isAdmin}
         onSave={handleSaveStudent}
         onDelete={handleDeleteStudent}
         onAddStrike={handleAddStrike}
