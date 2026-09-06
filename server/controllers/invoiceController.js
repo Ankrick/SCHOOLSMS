@@ -83,10 +83,10 @@ exports.markPaid = async (req, res, next) => {
     // Payment count = prior payments for this student + 1
     const priorCount = await PaymentHistory.countDocuments({ studentId: invoice.studentId });
 
-    // Students prepay: a payment made when the invoice falls due (its periodEnd)
-    // covers the month ahead, so the receipt period starts at the paid
-    // invoice's periodEnd — matching the next invoice's billing period.
-    const receiptPeriodStart = invoice.periodEnd || paidDate;
+    // Students prepay: an invoice due on a date covers the month starting that day, so the
+    // receipt period is the invoice's own period. dueDate is the reliable anchor here —
+    // it means the same thing for invoices raised before and after the prepay change.
+    const receiptPeriodStart = invoice.dueDate || invoice.periodStart || paidDate;
     const receiptPeriodEnd = addMonths(receiptPeriodStart, 1);
 
     // Record payment in history before deleting the invoice
@@ -115,8 +115,12 @@ exports.markPaid = async (req, res, next) => {
 
       const periodIndex = priorCount + 1;
       const billingAnchor = student.billingStartDate || student.enrolledDate || paidDate;
-      const periodStart = addMonths(billingAnchor, periodIndex);
-      const periodEnd = addMonths(billingAnchor, periodIndex + 1);
+      // Billing cadence is unchanged — the due date still lands one month per period after
+      // the anchor. What changed is that students prepay, so the period runs forward from
+      // the due date rather than up to it: due 04 Sept covers 04 Sept – 04 Oct.
+      const dueDate = addMonths(billingAnchor, periodIndex + 1);
+      const periodStart = dueDate;
+      const periodEnd = addMonths(dueDate, 1);
       const examOk =
         !batch || !batch.examDate || periodStart.slice(0, 7) <= batch.examDate.slice(0, 7);
 
@@ -140,10 +144,10 @@ exports.markPaid = async (req, res, next) => {
           periodStart,
           periodEnd,
           issueDate: paidDate,
-          dueDate: periodEnd,
+          dueDate,
           amount: fee,
           amountPaid: 0,
-          status: "Unpaid",
+          status: dueDate < paidDate ? "Overdue" : "Unpaid",
           paidDate: null,
           items: [
             {
@@ -172,6 +176,14 @@ exports.markPaid = async (req, res, next) => {
 exports.generateMonthly = async (req, res, next) => {
   try {
     const todayStr = today();
+
+    // Generating also refreshes what is already on the books: anything unpaid past its due
+    // date becomes Overdue, so a generate run never leaves stale "Unpaid" rows behind.
+    const swept = await Invoice.updateMany(
+      { status: "Unpaid", dueDate: { $lt: todayStr } },
+      { $set: { status: "Overdue" } }
+    );
+
     const activeStudents = await Student.find({ status: "Active" });
     const settings = await Settings.findOne();
     const batches = await Batch.find();
@@ -209,8 +221,11 @@ exports.generateMonthly = async (req, res, next) => {
       const lastPayment = lastPaymentByStudent[s.id];
       const periodIndex = lastPayment ? lastPayment.paymentCount : 0;
       const billingAnchor = s.billingStartDate || s.enrolledDate || todayStr;
-      const periodStart = addMonths(billingAnchor, periodIndex);
-      const periodEnd = addMonths(billingAnchor, periodIndex + 1);
+      // Same due-date cadence as before; the period now runs forward from the due date
+      // because students prepay — due 04 Sept covers 04 Sept – 04 Oct.
+      const dueDate = addMonths(billingAnchor, periodIndex + 1);
+      const periodStart = dueDate;
+      const periodEnd = addMonths(dueDate, 1);
 
       const batch = batchMap[s.batchId];
       if (batch && batch.examDate && periodStart.slice(0, 7) > batch.examDate.slice(0, 7)) {
@@ -218,7 +233,7 @@ exports.generateMonthly = async (req, res, next) => {
         continue;
       }
 
-      toGenerate.push({ student: s, periodStart, periodEnd });
+      toGenerate.push({ student: s, periodStart, periodEnd, dueDate });
     }
 
     if (toGenerate.length === 0) {
@@ -231,7 +246,7 @@ exports.generateMonthly = async (req, res, next) => {
 
     let nextNum = settings.nextInvoiceNum;
 
-    const newInvoices = toGenerate.map(({ student: s, periodStart, periodEnd }) => {
+    const newInvoices = toGenerate.map(({ student: s, periodStart, periodEnd, dueDate }) => {
       const batch = batchMap[s.batchId];
       const fee = s.customFee != null ? s.customFee : (batch ? batch.fee : settings.defaultFee);
       const periodLabel = `${fmtShortDate(periodStart)} – ${fmtShortDate(periodEnd)}`;
@@ -246,10 +261,11 @@ exports.generateMonthly = async (req, res, next) => {
         periodStart,
         periodEnd,
         issueDate: todayStr,
-        dueDate: periodEnd,
+        dueDate,
+        // A catch-up invoice for a period that has already begun is overdue on arrival.
         amount: fee,
         amountPaid: 0,
-        status: "Unpaid",
+        status: dueDate < todayStr ? "Overdue" : "Unpaid",
         paidDate: null,
         items: [{ desc: `${batch ? batch.name : "Tuition"} · ${periodLabel}`, qty: 1, rate: fee }],
         notes: "",
@@ -260,7 +276,12 @@ exports.generateMonthly = async (req, res, next) => {
     settings.nextInvoiceNum = nextNum;
     await settings.save();
 
-    res.status(201).json({ count: created.length, invoices: created, examSkipped });
+    res.status(201).json({
+      count: created.length,
+      invoices: created,
+      examSkipped,
+      markedOverdue: swept.modifiedCount,
+    });
   } catch (err) {
     next(err);
   }

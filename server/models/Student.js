@@ -12,6 +12,9 @@ const studentSchema = new mongoose.Schema(
     enrolledDate: { type: String, default: () => new Date().toISOString().split("T")[0] },
     billingStartDate: { type: String, default: "" },
     customFee: { type: Number, default: null },
+    // Who the finance team contacts to send an invoice. Replaces the old parentName +
+    // parentFacebook pair in the UI; both are kept below so no existing data is lost.
+    invoiceContact: { type: String, default: "" },
     parentName: { type: String, default: "" },
     parentPhone: { type: String, default: "" },
     parentFacebook: { type: String, default: "" },

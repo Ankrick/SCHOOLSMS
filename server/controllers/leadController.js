@@ -61,6 +61,8 @@ exports.convertToStudent = async (req, res, next) => {
       status: "Active",
       strikes: 0,
       enrolledDate: today(),
+      // The lead's contact becomes who finance invoices.
+      invoiceContact: lead.parentName || "",
       parentName: lead.parentName || "",
       parentPhone: lead.parentPhone || "",
       notes: `Converted from CRM lead. Source: ${lead.source}`,

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import html2canvas from "html2canvas";
 import * as api from "../api";
+import { StudentsPage } from "./StudentsBatches";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────
 const BRAND = {
@@ -26,9 +27,9 @@ const BRAND = {
 };
 
 const CRM_STAGES = ["Prospect", "Lead", "Customer", "Raving Fan"];
-const STRIKE_MAX = 3;
 const SUBJECTS = ["Computer Science", "ICT", "Mathematics", "Physics", "Biology", "Chemistry"];
-const TABS = ["Dashboard", "Students", "Teachers", "Batches", "Invoices", "Payment History", "Fee Tracker", "CRM", "Settings"];
+// Batches live inside the Students tab now, same as every other role's view.
+const TABS = ["Dashboard", "Students", "Teachers", "Invoices", "Payment History", "Fee Tracker", "CRM", "Settings"];
 
 const ICONS = {
   Dashboard: "📊", Students: "🎓", Teachers: "👩‍🏫", Batches: "📚", Invoices: "🧾", "Payment History": "💳", "Fee Tracker": "🗓️", CRM: "🤝", Settings: "⚙️",
@@ -204,16 +205,6 @@ function Badge({ stage }) {
   };
   const [c, bg] = map[stage] || [BRAND.grey, BRAND.greyLight];
   return <span style={S.badge(c, bg)}>{stage}</span>;
-}
-
-function Strikes({ count }) {
-  return (
-    <span style={{ display: "inline-flex", gap: 3 }} title={`${count}/${STRIKE_MAX} strikes`}>
-      {[0, 1, 2].map((i) => (
-        <span key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: i < count ? BRAND.red : BRAND.border, display: "inline-block" }} />
-      ))}
-    </span>
-  );
 }
 
 const FEE_STATUS_STYLE = {
@@ -414,285 +405,6 @@ function Dashboard({ data }) {
   );
 }
 
-// ─── STUDENTS ────────────────────────────────────────────────────
-function exportStudentsCSV(students, batches) {
-  const headers = [
-    "Name", "Burmese Name", "Email", "Phone", "Telegram",
-    "Batch", "Subject", "Status", "Strikes", "Custom Fee (MMK)",
-    "Enrolled Date", "Billing Start Date",
-    "Parent/Contact", "Parent Phone", "Parent Facebook", "Notes",
-  ];
-  const rows = students.map((s) => {
-    const batch = batches.find((b) => b.id === s.batchId);
-    return [
-      s.name, s.nameBurmese || "", s.email, s.phone || "", s.telegram || "",
-      batch ? batch.name : "", s.subject, s.status, s.strikes, s.customFee != null ? s.customFee : "",
-      s.enrolledDate || "", s.billingStartDate || "",
-      s.parentName || "", s.parentPhone || "", s.parentFacebook || "", s.notes || "",
-    ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",");
-  });
-  const csv = [headers.join(","), ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `students_${new Date().toISOString().slice(0, 10)}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function StudentsPage({ students, batches, onSaveStudent, onDeleteStudent, onAddStrike, onRemoveStrike }) {
-  const [search, setSearch] = useState("");
-  const [showAdd, setShowAdd] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [filterBatch, setFilterBatch] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
-
-  const filtered = students.filter((s) => {
-    if (filterBatch !== "all" && s.batchId !== filterBatch) return false;
-    if (filterStatus !== "all" && s.status !== filterStatus) return false;
-    if (search && !s.name.toLowerCase().includes(search.toLowerCase()) && !s.email.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
-
-  async function saveStudent(student) {
-    const saved = await onSaveStudent(student);
-    if (student.id) {
-      // editing — close immediately
-      setShowAdd(false);
-      setEditing(null);
-    }
-    return saved;
-  }
-
-  async function deleteStudent(id) {
-    if (!confirm("Remove this student?")) return;
-    try {
-      await onDeleteStudent(id);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  async function addStrike(id) {
-    try {
-      await onAddStrike(id);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  async function removeStrike(id) {
-    try {
-      await onRemoveStrike(id);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  return (
-    <div>
-      <div style={S.pageTitle}>Students</div>
-      <div style={S.pageDesc}>Manage enrolled students, track attendance and performance</div>
-
-      <div style={S.toolbar}>
-        <div style={S.searchBox}>
-          <span style={S.searchIcon}>{ICONS.search}</span>
-          <input style={S.searchInput} placeholder="Search students..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <select style={{ ...S.select, width: "auto", minWidth: 160 }} value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)}>
-          <option value="all">All Batches</option>
-          {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-        </select>
-        <select style={{ ...S.select, width: "auto", minWidth: 120 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-          <option value="all">All Status</option>
-          <option value="Active">Active</option>
-          <option value="Inactive">Inactive</option>
-          <option value="Expelled">Expelled</option>
-        </select>
-        <button style={S.btn("secondary")} onClick={() => exportStudentsCSV(filtered, batches)}>{ICONS.download} Export CSV</button>
-        <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Student</button>
-      </div>
-
-      <div style={S.card}>
-        {filtered.length === 0 ? (
-          <EmptyState icon="🎓" message="No students found" action={<button style={S.btn("primary")} onClick={() => setShowAdd(true)}>Add First Student</button>} />
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={S.table}>
-              <thead>
-                <tr>
-                  <th style={S.th}>Name</th>
-                  <th style={S.th}>Batch</th>
-                  <th style={S.th}>Subject</th>
-                  <th style={S.th}>Status</th>
-                  <th style={S.th}>Strikes</th>
-                  <th style={S.th}>Enrolled</th>
-                  <th style={S.th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((s) => {
-                  const batch = batches.find((b) => b.id === s.batchId);
-                  return (
-                    <tr key={s.id} onMouseEnter={(e) => e.currentTarget.style.background = BRAND.cream} onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
-                      <td style={S.td}>
-                        <div style={{ fontWeight: 600 }}>{s.name}</div>
-                        {s.nameBurmese && <div style={{ fontSize: 12, color: BRAND.charcoal }}>{s.nameBurmese}</div>}
-                        <div style={{ fontSize: 11, color: BRAND.grey }}>{s.email}</div>
-                      </td>
-                      <td style={S.td}>
-                        <span style={S.tag}>{batch ? batch.name : "—"}</span>
-                        {s.customFee != null && (
-                          <div style={{ fontSize: 11, color: BRAND.crimson, marginTop: 3, fontWeight: 600 }}>
-                            {fmtMMK(s.customFee)} (custom)
-                          </div>
-                        )}
-                      </td>
-                      <td style={S.td}>{s.subject}</td>
-                      <td style={S.td}><Badge stage={s.status} /></td>
-                      <td style={S.td}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <Strikes count={s.strikes} />
-                          <button style={{ ...S.btn("small"), padding: "2px 6px", fontSize: 10 }} onClick={() => addStrike(s.id)} title="Add strike">+</button>
-                          {s.strikes > 0 && <button style={{ ...S.btn("small"), padding: "2px 6px", fontSize: 10 }} onClick={() => removeStrike(s.id)} title="Remove strike">−</button>}
-                        </div>
-                      </td>
-                      <td style={S.td}>{fmtDate(s.enrolledDate)}</td>
-                      <td style={S.td}>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          <button style={S.btn("small")} onClick={() => setEditing(s)}>Edit</button>
-                          <button style={S.btn("small")} onClick={() => deleteStudent(s.id)}>🗑️</button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {(showAdd || editing) && (
-        <StudentForm
-          student={editing}
-          batches={batches}
-          onSave={saveStudent}
-          onClose={() => { setShowAdd(false); setEditing(null); }}
-        />
-      )}
-    </div>
-  );
-}
-
-function StudentForm({ student, batches, onSave, onClose }) {
-  const [form, setForm] = useState(
-    student || {
-      name: "", email: "", phone: "", batchId: batches[0]?.id || "",
-      subject: "Computer Science", status: "Active", strikes: 0, customFee: null,
-      enrolledDate: today(), billingStartDate: today(), parentName: "", parentPhone: "", parentFacebook: "",
-      nameBurmese: "", telegram: "", notes: "",
-    }
-  );
-  const [saving, setSaving] = useState(false);
-  const [receiptData, setReceiptData] = useState(null);
-
-  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
-  const batchFee = batches.find((b) => b.id === form.batchId)?.fee ?? 0;
-
-  async function handleSave() {
-    if (!form.name) { alert("Name is required"); return; }
-    setSaving(true);
-    try {
-      const saved = await onSave(form);
-      if (!student && saved) {
-        const batch = batches.find((b) => b.id === saved.batchId);
-        const billingStart = saved.billingStartDate || saved.enrolledDate || today();
-        setReceiptData({
-          studentName: saved.name,
-          nameBurmese: saved.nameBurmese || "",
-          studentEmail: saved.email || "",
-          batchName: batch ? batch.name : "—",
-          paidDate: saved.enrolledDate || today(),
-          periodStart: billingStart,
-          periodEnd: addOneMonth(billingStart),
-          amount: saved.customFee != null ? saved.customFee : (batch ? batch.fee : 0),
-          invoiceNumber: "",
-        });
-      }
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (receiptData) {
-    return (
-      <Modal title="Receipt — First Payment" onClose={onClose}>
-        <ReceiptPreview payment={receiptData} />
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-          <button style={S.btn("secondary")} onClick={onClose}>Done</button>
-        </div>
-      </Modal>
-    );
-  }
-
-  return (
-    <Modal title={student ? "Edit Student" : "Add Student"} onClose={onClose}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div style={S.formGroup}><label style={S.formLabel}>Full Name (English) *</label><input style={S.input} value={form.name} onChange={(e) => set("name", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Burmese Name</label><input style={S.input} value={form.nameBurmese || ""} onChange={(e) => set("nameBurmese", e.target.value)} placeholder="မြန်မာနာမည်" /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Email</label><input style={S.input} value={form.email} onChange={(e) => set("email", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Phone</label><input style={S.input} value={form.phone} onChange={(e) => set("phone", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Telegram</label><input style={S.input} value={form.telegram || ""} onChange={(e) => set("telegram", e.target.value)} placeholder="@username" /></div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Batch *</label>
-          <select style={S.select} value={form.batchId} onChange={(e) => set("batchId", e.target.value)}>
-            {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-        </div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Subject</label>
-          <select style={S.select} value={form.subject} onChange={(e) => set("subject", e.target.value)}>
-            {SUBJECTS.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Status</label>
-          <select style={S.select} value={form.status} onChange={(e) => set("status", e.target.value)}>
-            <option value="Active">Active</option>
-            <option value="Inactive">Inactive</option>
-            <option value="Expelled">Expelled</option>
-          </select>
-        </div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Custom Fee (MMK)</label>
-          <input
-            style={S.input}
-            type="number"
-            value={form.customFee ?? ""}
-            onChange={(e) => set("customFee", e.target.value === "" ? null : parseInt(e.target.value))}
-            placeholder={`Batch default: ${fmtMMK(batchFee)}`}
-          />
-        </div>
-        <div style={S.formGroup}><label style={S.formLabel}>Enrolled Date</label><input style={S.input} type="date" value={fmtDateInput(form.enrolledDate)} onChange={(e) => set("enrolledDate", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Billing Period</label><input style={S.input} type="date" value={fmtDateInput(form.billingStartDate || form.enrolledDate)} onChange={(e) => set("billingStartDate", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Contact</label><input style={S.input} value={form.parentName} onChange={(e) => set("parentName", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Parent Phone</label><input style={S.input} value={form.parentPhone} onChange={(e) => set("parentPhone", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Parent Facebook</label><input style={S.input} value={form.parentFacebook || ""} onChange={(e) => set("parentFacebook", e.target.value)} placeholder="Facebook username or profile URL" /></div>
-      </div>
-      <div style={S.formGroup}><label style={S.formLabel}>Notes</label><textarea style={{ ...S.input, height: 60, resize: "vertical" }} value={form.notes} onChange={(e) => set("notes", e.target.value)} /></div>
-      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 12 }}>
-        <button style={S.btn("secondary")} onClick={onClose}>Cancel</button>
-        <button style={S.btn("primary")} onClick={handleSave} disabled={saving}>
-          {saving ? "Saving…" : student ? "Save Student" : "Save & Generate Receipt"}
-        </button>
-      </div>
-    </Modal>
-  );
-}
 
 // ─── TEACHERS ────────────────────────────────────────────────────
 function TeachersPage({ teachers, onSaveTeacher, onDeleteTeacher }) {
@@ -839,190 +551,6 @@ function TeacherForm({ teacher, onSave, onClose }) {
   );
 }
 
-// ─── BATCHES ─────────────────────────────────────────────────────
-function BatchesPage({ batches, students, teachers = [], onSaveBatch, onDeleteBatch }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [editing, setEditing] = useState(null);
-
-  async function saveBatch(batch) {
-    try {
-      await onSaveBatch(batch);
-      setShowAdd(false);
-      setEditing(null);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  async function deleteBatch(id) {
-    const hasStudents = students.some((s) => s.batchId === id);
-    if (hasStudents) return alert("Cannot delete a batch that has enrolled students.");
-    if (!confirm("Delete this batch?")) return;
-    try {
-      await onDeleteBatch(id);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  return (
-    <div>
-      <div style={S.pageTitle}>Batches</div>
-      <div style={S.pageDesc}>Manage cohorts — max 15 students per batch</div>
-
-      <div style={S.toolbar}>
-        <button style={S.btn("primary")} onClick={() => setShowAdd(true)}>{ICONS.add} Add Batch</button>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 20 }}>
-        {batches.map((b) => {
-          const enrolled = students.filter((s) => s.batchId === b.id && s.status === "Active");
-          const pct = Math.round((enrolled.length / b.maxStudents) * 100);
-          const monthlyRevenue = enrolled.reduce((sum, s) => sum + (s.customFee != null ? s.customFee : b.fee), 0);
-          const teacher = teachers.find((t) => t.id === b.teacherId);
-          const teacherSalary = teacher ? teacher.monthlySalary || 0 : 0;
-          const profitAfterSalary = monthlyRevenue - teacherSalary;
-          const commission = Math.round(Math.max(0, profitAfterSalary) * (b.commissionPercent || 0) / 100);
-          return (
-            <div key={b.id} style={S.card}>
-              <div style={{ ...S.flexBetween, marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 16 }}>{b.name}</div>
-                  <div style={{ fontSize: 12, color: BRAND.grey }}>{b.syllabus} • {b.days}</div>
-                  {teacher && (
-                    <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 2 }}>
-                      👨‍🏫 <strong style={{ color: BRAND.charcoal }}>{teacher.name}</strong>
-                      {(b.commissionPercent || 0) > 0 && <> · {b.commissionPercent}% commission</>}
-                    </div>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button style={S.btn("small")} onClick={() => setEditing(b)}>Edit</button>
-                  <button style={S.btn("small")} onClick={() => deleteBatch(b.id)}>🗑️</button>
-                </div>
-              </div>
-              <div style={{ ...S.flexBetween, marginBottom: 6 }}>
-                <span style={{ fontSize: 13 }}>{enrolled.length} / {b.maxStudents} students</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: pct >= 90 ? BRAND.red : BRAND.green }}>{pct}%</span>
-              </div>
-              <div style={{ height: 8, borderRadius: 4, background: BRAND.greyLight, overflow: "hidden", marginBottom: 16 }}>
-                <div style={{ height: "100%", width: `${pct}%`, background: pct >= 90 ? BRAND.red : pct >= 70 ? BRAND.gold : BRAND.green, borderRadius: 4 }} />
-              </div>
-              <div style={{ fontSize: 13, color: BRAND.grey }}>
-                Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(b.fee)}</strong>/month
-                &nbsp;·&nbsp; <strong style={{ color: BRAND.charcoal }}>{b.sessionsPerMonth || 8}</strong> sessions
-                {!teacher && (b.commissionPercent || 0) > 0 && (
-                  <>&nbsp;·&nbsp; <strong style={{ color: BRAND.charcoal }}>{b.commissionPercent}%</strong> commission</>
-                )}
-              </div>
-              {b.examSession && (
-                <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span style={S.badge(
-                    isExamPast(b.examDate) ? BRAND.grey : isExamSoon(b.examDate) ? BRAND.orange : BRAND.gold,
-                    isExamPast(b.examDate) ? BRAND.greyLight : isExamSoon(b.examDate) ? BRAND.orangeLight : "#FFF8E8"
-                  )}>
-                    {isExamPast(b.examDate) ? "✓ Complete" : isExamSoon(b.examDate) ? "⚡ " : "🎯 "}{isExamPast(b.examDate) ? "" : b.examSession}
-                  </span>
-                  {b.examDate && (
-                    <span style={{ fontSize: 12, color: BRAND.grey }}>
-                      Exam: {fmtDate(b.examDate)}
-                    </span>
-                  )}
-                </div>
-              )}
-              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BRAND.border}` }}>
-                <div style={{ fontSize: 10, color: BRAND.grey, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 3 }}>Monthly Revenue</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: BRAND.crimson }}>{fmtMMK(monthlyRevenue)}</div>
-                <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 2 }}>{enrolled.length} student{enrolled.length !== 1 ? "s" : ""} × fees</div>
-                {teacherSalary > 0 && (
-                  <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 2 }}>
-                    Teacher salary: <strong style={{ color: BRAND.red }}>−{fmtMMK(teacherSalary)}</strong>
-                  </div>
-                )}
-                {commission > 0 && (
-                  <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 2 }}>
-                    Commission ({b.commissionPercent}% of {fmtMMK(Math.max(0, profitAfterSalary))} profit): <strong style={{ color: BRAND.red }}>−{fmtMMK(commission)}</strong>
-                  </div>
-                )}
-                {(teacherSalary > 0 || commission > 0) && (
-                  <div style={{ fontSize: 11, marginTop: 2 }}>
-                    Batch profit: <strong style={{ color: profitAfterSalary - commission >= 0 ? BRAND.green : BRAND.red }}>{fmtMMK(profitAfterSalary - commission)}</strong>
-                  </div>
-                )}
-              </div>
-
-              {enrolled.length > 0 && (
-                <div style={{ marginTop: 12, borderTop: `1px solid ${BRAND.border}`, paddingTop: 12 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: BRAND.grey, marginBottom: 6, textTransform: "uppercase" }}>Enrolled</div>
-                  {enrolled.map((s) => (
-                    <div key={s.id} style={{ fontSize: 12, padding: "3px 0", display: "flex", alignItems: "center", gap: 6 }}>
-                      <span>{s.name}</span>
-                      <Strikes count={s.strikes} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {(showAdd || editing) && (
-        <BatchForm batch={editing} teachers={teachers} onSave={saveBatch} onClose={() => { setShowAdd(false); setEditing(null); }} />
-      )}
-    </div>
-  );
-}
-
-function BatchForm({ batch, teachers = [], onSave, onClose }) {
-  const [form, setForm] = useState(
-    batch
-      ? { examSession: "", examDate: "", sessionsPerMonth: 8, teacherId: "", commissionPercent: 0, ...batch }
-      : { name: "", syllabus: "CIE", days: "", maxStudents: 15, fee: 180000, examSession: "", examDate: "", sessionsPerMonth: 8, teacherId: "", commissionPercent: 0 }
-  );
-  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
-
-  return (
-    <Modal title={batch ? "Edit Batch" : "Add Batch"} onClose={onClose}>
-      <div style={S.formGroup}><label style={S.formLabel}>Batch Name *</label><input style={S.input} value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. CIE 0478 — Sat/Mon" /></div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Syllabus</label>
-          <select style={S.select} value={form.syllabus} onChange={(e) => set("syllabus", e.target.value)}>
-            <option value="CIE">CIE</option><option value="Edexcel">Edexcel</option>
-          </select>
-        </div>
-        <div style={S.formGroup}><label style={S.formLabel}>Days</label><input style={S.input} value={form.days} onChange={(e) => set("days", e.target.value)} placeholder="e.g. Sat & Mon" /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Max Students</label><input style={S.input} type="number" value={form.maxStudents} onChange={(e) => set("maxStudents", parseInt(e.target.value) || 15)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Monthly Fee (MMK)</label><input style={S.input} type="number" value={form.fee} onChange={(e) => set("fee", parseInt(e.target.value) || 0)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Sessions / Month</label><input style={S.input} type="number" value={form.sessionsPerMonth || 8} onChange={(e) => set("sessionsPerMonth", parseInt(e.target.value) || 8)} /></div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Teacher</label>
-          <select style={S.select} value={form.teacherId || ""} onChange={(e) => set("teacherId", e.target.value)}>
-            <option value="">— Unassigned —</option>
-            {teachers.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
-        </div>
-        <div style={S.formGroup}><label style={S.formLabel}>Teacher Commission (%)</label><input style={S.input} type="number" min="0" max="100" value={form.commissionPercent || 0} onChange={(e) => set("commissionPercent", Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))} /></div>
-      </div>
-      <div style={{ fontSize: 12, color: BRAND.grey, marginBottom: 8 }}>Commission is paid from batch profit: (monthly revenue − teacher salary) × commission %.</div>
-      <div style={{ ...S.formGroup, marginTop: 4 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: BRAND.grey, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.5px" }}>Exam Target</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-          <div style={S.formGroup}><label style={S.formLabel}>Exam Session</label><input style={S.input} value={form.examSession || ""} onChange={(e) => set("examSession", e.target.value)} placeholder="e.g. Oct/Nov 2026" /></div>
-          <div style={S.formGroup}><label style={S.formLabel}>Exam Date</label><input style={S.input} type="date" value={form.examDate || ""} onChange={(e) => set("examDate", e.target.value)} /></div>
-        </div>
-        <div style={{ fontSize: 12, color: BRAND.grey }}>Invoices stop after the exam month. Leave blank for open-ended batches.</div>
-      </div>
-      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 12 }}>
-        <button style={S.btn("secondary")} onClick={onClose}>Cancel</button>
-        <button style={S.btn("primary")} onClick={() => form.name ? onSave(form) : alert("Name is required")}>Save Batch</button>
-      </div>
-    </Modal>
-  );
-}
 
 // ─── INVOICES ────────────────────────────────────────────────────
 function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDeleteInvoice, onGenerateInvoices }) {
@@ -1056,11 +584,12 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
       if (dueDateTo && inv.dueDate && inv.dueDate > dueDateTo) return false;
       if (search) {
         const s = search.toLowerCase();
-        const parentName = studentsById[inv.studentId]?.parentName || "";
+        const student = studentsById[inv.studentId];
+        const contact = student?.invoiceContact || student?.parentName || "";
         return (
           inv.invoiceNumber.toLowerCase().includes(s) ||
           inv.studentName.toLowerCase().includes(s) ||
-          parentName.toLowerCase().includes(s)
+          contact.toLowerCase().includes(s)
         );
       }
       return true;
@@ -1252,7 +781,7 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                   </th>
                   <th style={S.th}>Invoice #</th>
                   <th style={S.th}>Student</th>
-                  <th style={S.th}>Parent</th>
+                  <th style={S.th}>Guardian fb contact</th>
                   <th style={S.th}>Batch</th>
                   <th style={S.th}>Period</th>
                   <th style={S.th}>Amount</th>
@@ -1287,13 +816,14 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                     <td style={S.td}>{inv.studentName}</td>
                     <td style={S.td}>
                       {(() => {
-                        const parent = studentsById[inv.studentId];
-                        if (!parent || !parent.parentName) return <span style={{ color: BRAND.grey }}>—</span>;
+                        const student = studentsById[inv.studentId];
+                        const contact = student?.invoiceContact || student?.parentName;
+                        if (!contact) return <span style={{ color: BRAND.grey }}>—</span>;
                         return (
                           <div>
-                            <div>{parent.parentName}</div>
-                            {parent.parentPhone && (
-                              <div style={{ fontSize: 12, color: BRAND.grey }}>{parent.parentPhone}</div>
+                            <div>{contact}</div>
+                            {student.parentPhone && (
+                              <div style={{ fontSize: 12, color: BRAND.grey }}>{student.parentPhone}</div>
                             )}
                           </div>
                         );
@@ -1425,9 +955,9 @@ function InvoicePreview({ invoice, settings }) {
         </thead>
         <tbody>
           {(invoice.items || []).map((item, i) => {
-            const correctedDesc = invoice.dueDate && item.desc
-              ? item.desc.replace(/ · .+$/, ` · ${fmtPeriod(invoice.dueDate, addOneMonth(invoice.dueDate))}`)
-              : item.desc;
+            // The stored period is now the prepay period, so the saved description is
+            // already right — no need to rewrite it from the due date.
+            const correctedDesc = item.desc;
             return (
             <tr key={i}>
               <td style={S.td}>{correctedDesc}</td>
@@ -2330,7 +1860,10 @@ export default function OwnerSMS({ onLogout }) {
 
   async function handleGenerateInvoices() {
     const result = await api.generateMonthlyInvoices();
-    setData((prev) => ({ ...prev, invoices: [...prev.invoices, ...result.invoices] }));
+    // Generating also flips existing past-due invoices to Overdue, so pull the whole list
+    // back rather than appending — otherwise those rows would still read "Unpaid" here.
+    const invoices = await api.getInvoices();
+    setData((prev) => ({ ...prev, invoices }));
     return result.count;
   }
 
@@ -2420,14 +1953,20 @@ export default function OwnerSMS({ onLogout }) {
 
   const pages = {
     Dashboard: <Dashboard data={data} />,
+    // Same Students page every role sees; teachers enable batch assignment + commission,
+    // and receiptRenderer adds the first-payment receipt after creating a student.
     Students: (
       <StudentsPage
         students={data.students}
         batches={data.batches}
+        teachers={data.teachers}
         onSaveStudent={handleSaveStudent}
         onDeleteStudent={handleDeleteStudent}
         onAddStrike={handleAddStrike}
         onRemoveStrike={handleRemoveStrike}
+        onSaveBatch={handleSaveBatch}
+        onDeleteBatch={handleDeleteBatch}
+        receiptRenderer={(payment) => <ReceiptPreview payment={payment} />}
       />
     ),
     Teachers: (
@@ -2435,15 +1974,6 @@ export default function OwnerSMS({ onLogout }) {
         teachers={data.teachers}
         onSaveTeacher={handleSaveTeacher}
         onDeleteTeacher={handleDeleteTeacher}
-      />
-    ),
-    Batches: (
-      <BatchesPage
-        batches={data.batches}
-        students={data.students}
-        teachers={data.teachers}
-        onSaveBatch={handleSaveBatch}
-        onDeleteBatch={handleDeleteBatch}
       />
     ),
     Invoices: (
