@@ -24,7 +24,9 @@ const app = express();
 connectDB();
 
 app.use(cors());
-app.use(express.json());
+// Payment slips ride along with "mark invoice paid" as base64 data URLs, which blow past
+// body-parser's 100 KB default; the controller caps a single slip at 4 MB.
+app.use(express.json({ limit: "10mb" }));
 
 // Lightweight endpoint for uptime pingers — keeps a free-tier host from spinning down idle.
 app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));

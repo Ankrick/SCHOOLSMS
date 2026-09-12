@@ -8,6 +8,7 @@
 //   receiptRenderer - when supplied, creating a student offers a first-payment receipt.
 
 import { useState, useMemo, Fragment } from "react";
+import { SlipFields, SlipMissingNote, emptySlipPayment, isSlipComplete } from "./PaymentSlip";
 
 const BRAND = {
   crimson: "#8B1A1A",
@@ -101,13 +102,6 @@ const fmtDate = (d) =>
   d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const fmtDateInput = (d) => (d ? new Date(d).toISOString().split("T")[0] : "");
 const today = () => new Date().toISOString().split("T")[0];
-const addOneMonth = (dateStr) => {
-  const [year, month, day] = dateStr.split("-").map(Number);
-  const nm = month === 12 ? 1 : month + 1;
-  const ny = month === 12 ? year + 1 : year;
-  const lastDay = new Date(ny, nm, 0).getDate();
-  return `${ny}-${String(nm).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
-};
 
 // ─── PRIMITIVES ──────────────────────────────────────────────────
 function Modal({ title, onClose, children, contentStyle }) {
@@ -213,8 +207,12 @@ function StudentDetailCard({ student, batch, onEdit, onDelete, onAddStrike, onRe
 }
 
 // ─── FORMS ───────────────────────────────────────────────────────
-// receiptRenderer is optional: shells that can show payment documents (the owner console)
-// pass one, and a newly created student then offers a first-payment receipt.
+// Registering a student is also their first payment: the form asks for the KBZPay slip and
+// the date off it, the server records that fee against the student, and the receipt for it
+// is shown as soon as the student is saved. Editing an existing student asks for neither.
+//
+// receiptRenderer is optional: shells that can show payment documents pass one, and a newly
+// created student then gets a first-payment receipt.
 // lockedBatchId fixes the batch for a new student (added from that batch's window); it is
 // undefined when editing, where the batch stays selectable so students can be moved.
 function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receiptRenderer }) {
@@ -229,29 +227,36 @@ function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receipt
   );
   const [saving, setSaving] = useState(false);
   const [receiptData, setReceiptData] = useState(null);
+  const isNew = !student;
+  const [firstPayment, setFirstPayment] = useState(emptySlipPayment);
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
   const batchFee = batches.find((b) => b.id === form.batchId)?.fee ?? 0;
 
   async function handleSave() {
     if (!form.name.trim()) return alert("Name is required");
+    if (isNew && !isSlipComplete(firstPayment)) {
+      return alert("Enter the paid date and attach the KBZPay slip for the first payment.");
+    }
     setSaving(true);
     try {
-      const saved = await onSave(form);
-      if (!student && saved && receiptRenderer) {
-        const batch = batches.find((b) => b.id === saved.batchId);
-        const billingStart = saved.billingStartDate || saved.enrolledDate || today();
-        setReceiptData({
-          studentName: saved.name,
-          nameBurmese: saved.nameBurmese || "",
-          studentEmail: saved.email || "",
-          batchName: batch ? batch.name : "—",
-          paidDate: saved.enrolledDate || today(),
-          periodStart: billingStart,
-          periodEnd: addOneMonth(billingStart),
-          amount: saved.customFee != null ? saved.customFee : batch ? batch.fee : 0,
-          invoiceNumber: "",
-        });
+      const saved = await onSave(
+        isNew
+          ? {
+              ...form,
+              firstPayment: {
+                paidDate: firstPayment.paidDate,
+                slip: { image: firstPayment.image, filename: firstPayment.filename },
+              },
+            }
+          : form
+      );
+      // The receipt is drawn from the payment the server actually recorded, so what the
+      // student is handed matches the books exactly — amount, period and reference.
+      if (isNew && saved && saved.payment && receiptRenderer) {
+        setReceiptData(saved.payment);
+      } else {
+        onClose();
       }
     } catch (err) {
       alert(err.message);
@@ -262,7 +267,7 @@ function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receipt
 
   if (receiptData && receiptRenderer) {
     return (
-      <Modal title="Receipt — First Payment" onClose={onClose}>
+      <Modal title={`Receipt — ${form.name} registered`} onClose={onClose}>
         {receiptRenderer(receiptData)}
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
           <button style={S.btn("secondary")} onClick={onClose}>Done</button>
@@ -330,10 +335,30 @@ function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receipt
         <div style={S.formGroup}><label style={S.formLabel}>Parent Phone</label><input style={S.input} value={form.parentPhone || ""} onChange={(e) => set("parentPhone", e.target.value)} /></div>
       </div>
       <div style={S.formGroup}><label style={S.formLabel}>Notes</label><textarea style={{ ...S.input, height: 60, resize: "vertical" }} value={form.notes || ""} onChange={(e) => set("notes", e.target.value)} /></div>
+
+      {isNew && (
+        <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 20, marginTop: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>First payment</div>
+          <div style={{ fontSize: 12, color: BRAND.grey, marginBottom: 16 }}>
+            {fmtMMK(form.customFee != null ? form.customFee : batchFee)} for the first billing month. Recorded against the student and receipted on save.
+          </div>
+          <SlipFields
+            value={firstPayment}
+            onChange={setFirstPayment}
+            disabled={saving}
+            dropHint="Kept with the payment and viewable later under Transactions."
+          />
+          <SlipMissingNote value={firstPayment} />
+        </div>
+      )}
       <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 12 }}>
         <button style={S.btn("secondary")} onClick={onClose} disabled={saving}>Cancel</button>
-        <button style={S.btn("primary")} onClick={handleSave} disabled={saving}>
-          {saving ? "Saving…" : student || !receiptRenderer ? "Save Student" : "Save & Generate Receipt"}
+        <button
+          style={{ ...S.btn("primary"), ...(isNew && !isSlipComplete(firstPayment) ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
+          onClick={handleSave}
+          disabled={saving || (isNew && !isSlipComplete(firstPayment))}
+        >
+          {saving ? "Saving…" : !isNew || !receiptRenderer ? "Save Student" : "Save & Generate Receipt"}
         </button>
       </div>
     </Modal>
@@ -471,11 +496,10 @@ export function StudentsPage({
     ? groups.find((g) => (g.batch ? g.batch.id : "__none") === openBatchKey)
     : null;
 
+  // Closing is left to the form: a newly registered student shows its receipt in the same
+  // window, and unmounting here would take that receipt with it.
   async function saveStudent(form) {
-    const saved = await onSaveStudent(form);
-    setAddingToBatchKey(null);
-    setEditingStudent(null);
-    return saved;
+    return onSaveStudent(form);
   }
 
   async function deleteStudent(id) {

@@ -76,7 +76,11 @@ export const getInvoices = () => api.get("/invoices").then(handle).catch(err);
 export const createInvoice = (data) => api.post("/invoices", data).then(handle).catch(err);
 export const updateInvoice = (id, data) => api.put(`/invoices/${id}`, data).then(handle).catch(err);
 export const deleteInvoice = (id) => api.delete(`/invoices/${id}`).then(handle).catch(err);
-export const markInvoicePaid = (id) => api.patch(`/invoices/${id}/pay`).then(handle).catch(err);
+// `payment` is { paidDate, slip } read off the attached KBZPay receipt — the server
+// refuses to settle an invoice without it. The slip image makes this request far heavier
+// than the rest, so it gets a longer leash than the shared 20s timeout.
+export const markInvoicePaid = (id, payment) =>
+  api.patch(`/invoices/${id}/pay`, payment, { timeout: 60000 }).then(handle).catch(err);
 export const generateMonthlyInvoices = () =>
   api.post("/invoices/generate").then(handle).catch(err);
 export const markInvoicesOverdue = () =>
@@ -95,7 +99,9 @@ export const getSettings = () => api.get("/settings").then(handle).catch(err);
 export const updateSettings = (data) => api.put("/settings", data).then(handle).catch(err);
 
 // Payment History
+// The list deliberately comes back without slip images; fetch one when it is opened.
 export const getPaymentHistory = () => api.get("/payment-history").then(handle).catch(err);
+export const getPaymentSlip = (id) => api.get(`/payment-history/${id}/slip`).then(handle).catch(err);
 export const updatePaymentHistory = (id, data) => api.patch(`/payment-history/${id}`, data).then(handle).catch(err);
 export const deletePaymentHistory = (id) => api.delete(`/payment-history/${id}`).then(handle).catch(err);
 

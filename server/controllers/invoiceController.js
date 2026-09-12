@@ -3,6 +3,7 @@ const Student = require("../models/Student");
 const Batch = require("../models/Batch");
 const Settings = require("../models/Settings");
 const PaymentHistory = require("../models/PaymentHistory");
+const { readSlipPayload, withoutSlipImage } = require("../utils/slip");
 
 const today = () => new Date().toISOString().split("T")[0];
 const currentMonthKey = () => {
@@ -74,14 +75,22 @@ exports.deleteInvoice = async (req, res, next) => {
 
 exports.markPaid = async (req, res, next) => {
   try {
+    const { error, paidDate, slip } = readSlipPayload(req.body);
+    if (error) return res.status(400).json({ message: error });
+
     const invoice = await Invoice.findById(req.params.id);
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
-    const paidDate = today();
+    const todayStr = today();
     const student = await Student.findById(invoice.studentId).catch(() => null);
 
-    // Payment count = prior payments for this student + 1
-    const priorCount = await PaymentHistory.countDocuments({ studentId: invoice.studentId });
+    // Payment count = prior payments for this student + 1. The fee collected when the
+    // student registered is deliberately not counted: it is numbered 0 and covers the first
+    // billing period, so invoice payments keep running 1, 2, 3… as they always have.
+    const priorCount = await PaymentHistory.countDocuments({
+      studentId: invoice.studentId,
+      kind: { $ne: "registration" },
+    });
 
     // Students prepay: an invoice due on a date covers the month starting that day, so the
     // receipt period is the invoice's own period. dueDate is the reliable anchor here —
@@ -104,6 +113,7 @@ exports.markPaid = async (req, res, next) => {
       periodEnd: receiptPeriodEnd,
       paymentCount: priorCount + 1,
       notes: invoice.notes || "",
+      slip,
     });
 
     // Auto-generate the next invoice, anchored to the student's enrollment date
@@ -143,11 +153,15 @@ exports.markPaid = async (req, res, next) => {
           monthKey: periodStart.slice(0, 7),
           periodStart,
           periodEnd,
+          // Keyed to the slip's date, not today's: deleting the payment record looks the
+          // follow-on invoice up by { studentId, issueDate: paidDate }.
           issueDate: paidDate,
           dueDate,
           amount: fee,
           amountPaid: 0,
-          status: dueDate < paidDate ? "Overdue" : "Unpaid",
+          // Whether the next invoice is already late is a question about now, not about
+          // when the slip was dated — a slip filed a month late must not hide that.
+          status: dueDate < todayStr ? "Overdue" : "Unpaid",
           paidDate: null,
           items: [
             {
@@ -167,7 +181,7 @@ exports.markPaid = async (req, res, next) => {
     // Delete the original invoice — it now lives in PaymentHistory
     await Invoice.findByIdAndDelete(req.params.id);
 
-    res.json({ history, nextInvoice, deletedInvoiceId: req.params.id });
+    res.json({ history: withoutSlipImage(history), nextInvoice, deletedInvoiceId: req.params.id });
   } catch (err) {
     next(err);
   }
@@ -199,10 +213,13 @@ exports.generateMonthly = async (req, res, next) => {
       invoicesByStudent[inv.studentId].push(inv);
     }
 
-    // Most recent payment per student — used to count periods already paid for
+    // Furthest-along payment per student — used to count periods already paid for. This
+    // goes by payment number rather than by date: a registration fee is numbered 0, and
+    // sorting on paidDate alone could put it last if an invoice payment were ever
+    // backdated, which would re-raise a period the student has already paid.
     const allHistory = await PaymentHistory.find({
       studentId: { $in: activeStudents.map((s) => s.id) },
-    }).sort({ paidDate: -1 });
+    }).sort({ paymentCount: -1 });
     const lastPaymentByStudent = {};
     for (const ph of allHistory) {
       if (!lastPaymentByStudent[ph.studentId]) lastPaymentByStudent[ph.studentId] = ph;

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import html2canvas from "html2canvas";
 import * as api from "../api";
 import { StudentsPage } from "./StudentsBatches";
+import { MarkPaidModal, SlipViewer } from "./PaymentSlip";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────
 const BRAND = {
@@ -29,10 +30,10 @@ const BRAND = {
 const CRM_STAGES = ["Prospect", "Lead", "Customer", "Raving Fan"];
 const SUBJECTS = ["Computer Science", "ICT", "Mathematics", "Physics", "Biology", "Chemistry"];
 // Batches live inside the Students tab now, same as every other role's view.
-const TABS = ["Dashboard", "Students", "Teachers", "Invoices", "Payment History", "Fee Tracker", "CRM", "Settings"];
+const TABS = ["Dashboard", "Students", "Teachers", "Invoices", "Payment History", "Transactions", "Fee Tracker", "CRM", "Settings"];
 
 const ICONS = {
-  Dashboard: "📊", Students: "🎓", Teachers: "👩‍🏫", Batches: "📚", Invoices: "🧾", "Payment History": "💳", "Fee Tracker": "🗓️", CRM: "🤝", Settings: "⚙️",
+  Dashboard: "📊", Students: "🎓", Teachers: "👩‍🏫", Batches: "📚", Invoices: "🧾", "Payment History": "💳", Transactions: "📸", "Fee Tracker": "🗓️", CRM: "🤝", Settings: "⚙️",
   search: "🔍", add: "➕", edit: "✏️", trash: "🗑️", check: "✅", x: "❌",
   warning: "⚠️", clock: "🕐", money: "💰", star: "⭐", fire: "🔥",
   send: "📤", eye: "👁️", download: "⬇️", filter: "🔽",
@@ -560,6 +561,10 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
   const [dueDateTo, setDueDateTo] = useState("");
   const [preview, setPreview] = useState(null);
   const [showGenerate, setShowGenerate] = useState(false);
+  // The invoices a slip is currently being attached to — one row, or a bulk selection.
+  const [payTarget, setPayTarget] = useState(null);
+  // The payments just recorded, receipted as soon as the slip dialog closes.
+  const [receipts, setReceipts] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [dueSort, setDueSort] = useState(null); // null (default) | "asc" | "desc"
 
@@ -614,12 +619,41 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
     }
   }
 
-  async function markPaid(id) {
+  // Settling an invoice runs through the slip modal — the KBZPay screenshot and the paid
+  // date from it are both required before anything is recorded.
+  function markPaid(inv) {
+    setPayTarget([inv]);
+  }
+
+  // Applies one slip to everything it covers, sequentially rather than in parallel: the
+  // server derives each payment's number and the next invoice number from what is already
+  // stored, so overlapping requests for the same student would collide.
+  async function confirmPayment(payment) {
+    const target = payTarget || [];
+    const settled = [];
+    const recorded = [];
     try {
-      await onMarkPaid(id);
-    } catch (err) {
-      alert(err.message);
+      for (const inv of target) {
+        recorded.push(await onMarkPaid(inv.id, payment));
+        settled.push(inv.id);
+      }
+    } finally {
+      // Whatever went through stays through, even if a later one fails — the modal reports
+      // the failure and the selection is left holding only what still needs paying.
+      if (settled.length) {
+        setSelected((prev) => {
+          const next = new Set(prev);
+          settled.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
     }
+    setPayTarget(null);
+    // Same courtesy as registering a student: the payer gets a receipt on the spot, drawn
+    // from the record the server wrote rather than from what was typed into the form. A
+    // failed run leaves this alone — the receipts for whatever did go through are still on
+    // their rows in Payment History.
+    if (recorded.length) setReceipts(recorded.filter(Boolean));
   }
 
   async function deleteInvoice(id) {
@@ -647,15 +681,12 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
     );
   }
 
-  async function bulkMarkPaid() {
+  // One transfer often settles several months at once, so a bulk selection asks for a
+  // single slip and files the same receipt against each invoice.
+  function bulkMarkPaid() {
     const toMark = filtered.filter((i) => selected.has(i.id) && (i.status === "Unpaid" || i.status === "Overdue"));
     if (toMark.length === 0) return alert("No unpaid invoices in the selection.");
-    try {
-      await Promise.all(toMark.map((i) => onMarkPaid(i.id)));
-      setSelected(new Set());
-    } catch (err) {
-      alert(err.message);
-    }
+    setPayTarget(toMark);
   }
 
   async function bulkDelete() {
@@ -840,7 +871,7 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setPreview(inv)} title="Preview">👁️</button>
                         {(inv.status === "Unpaid" || inv.status === "Overdue") && (
-                          <button style={S.btn("success")} onClick={() => markPaid(inv.id)}>Mark Paid</button>
+                          <button style={S.btn("success")} onClick={() => markPaid(inv)}>Mark Paid</button>
                         )}
                         <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => deleteInvoice(inv.id)}>🗑️</button>
                       </div>
@@ -872,6 +903,41 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
             <button style={S.btn("gold")} onClick={generateMonthlyInvoices}>Generate Now</button>
           </div>
         </Modal>
+      )}
+
+      {receipts && receipts.length > 0 && (
+        <Modal
+          title={
+            receipts.length === 1
+              ? `Receipt — ${receipts[0].studentName}`
+              : `Receipts — ${receipts.length} payments`
+          }
+          onClose={() => setReceipts(null)}
+        >
+          {receipts.map((ph, i) => (
+            <div
+              key={ph.id}
+              style={
+                i === 0
+                  ? undefined
+                  : { marginTop: 24, paddingTop: 24, borderTop: `1px solid ${BRAND.border}` }
+              }
+            >
+              <ReceiptPreview payment={ph} />
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+            <button style={S.btn("secondary")} onClick={() => setReceipts(null)}>Done</button>
+          </div>
+        </Modal>
+      )}
+
+      {payTarget && (
+        <MarkPaidModal
+          invoices={payTarget}
+          onCancel={() => setPayTarget(null)}
+          onConfirm={confirmPayment}
+        />
       )}
 
       {preview && (
@@ -1105,6 +1171,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [receipt, setReceipt] = useState(null);
+  const [slipFor, setSlipFor] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editDate, setEditDate] = useState("");
   const [savingDate, setSavingDate] = useState(false);
@@ -1247,11 +1314,14 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
                       )}
                     </td>
                     <td style={S.td}>
-                      <span style={S.badge(BRAND.crimson, BRAND.redLight)}>#{ph.paymentCount}</span>
+                      <span style={S.badge(BRAND.crimson, BRAND.redLight)}>{ph.kind === "registration" ? "Registration" : "#" + ph.paymentCount}</span>
                     </td>
                     <td style={S.td}>
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setReceipt(ph)} title="Generate Receipt">🧾 Receipt</button>
+                        {ph.slip && ph.slip.attachedAt && (
+                          <button style={S.btn("small")} onClick={() => setSlipFor(ph)} title="View the KBZPay slip for this payment">📎 Slip</button>
+                        )}
                         <button
                           style={{ ...S.btn("small"), color: BRAND.red }}
                           onClick={() => {
@@ -1275,6 +1345,270 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
         <Modal title="Payment Receipt" onClose={() => setReceipt(null)}>
           <ReceiptPreview payment={receipt} />
         </Modal>
+      )}
+
+      {slipFor && (
+        <SlipViewer payment={slipFor} loadSlip={api.getPaymentSlip} onClose={() => setSlipFor(null)} />
+      )}
+    </div>
+  );
+}
+
+// ─── TRANSACTIONS ────────────────────────────────────────────────
+// The KBZPay slips filed against payments, by student. One card per student who has paid;
+// pressing a card opens that student's slips, newest first, and pressing a slip opens it
+// full size. Owner-only — the other roles record payments but do not review the evidence.
+//
+// Slip images are not part of the payment-history list (they are ~100 KB each), so a
+// student's images are fetched when their card is opened and kept for the rest of the visit.
+const hasSlip = (ph) => !!(ph.slip && ph.slip.attachedAt);
+
+function StudentSlips({ group, slipCache, onBack }) {
+  // Mirrors the cache so a fetch landing re-renders; the cache itself survives going back.
+  const [, bump] = useState(0);
+  const [viewing, setViewing] = useState(null);
+  const [failed, setFailed] = useState({});
+
+  useEffect(() => {
+    let live = true;
+    for (const ph of group.payments) {
+      if (!hasSlip(ph) || slipCache.has(ph.id)) continue;
+      slipCache.set(ph.id, null); // claim it, so a re-open does not refetch mid-flight
+      api
+        .getPaymentSlip(ph.id)
+        .then((slip) => {
+          slipCache.set(ph.id, slip);
+          if (live) bump((n) => n + 1);
+        })
+        .catch((err) => {
+          slipCache.delete(ph.id);
+          if (live) setFailed((prev) => ({ ...prev, [ph.id]: err.message }));
+        });
+    }
+    return () => { live = false; };
+  }, [group.studentId, group.payments, slipCache]);
+
+  return (
+    <div>
+      <button style={{ ...S.btn("secondary"), marginBottom: 16 }} onClick={onBack}>← All students</button>
+
+      <div style={S.pageTitle}>{group.name}</div>
+      <div style={S.pageDesc}>
+        {group.nameBurmese ? `${group.nameBurmese} · ` : ""}
+        {group.batchName} · {group.payments.length} payment{group.payments.length !== 1 ? "s" : ""} · {fmtMMK(group.total)} collected
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 20, alignItems: "start" }}>
+        {group.payments.map((ph) => {
+          const slip = slipCache.get(ph.id);
+          const error = failed[ph.id];
+          const missing = !hasSlip(ph);
+
+          return (
+            <div
+              key={ph.id}
+              style={{
+                ...S.card,
+                marginBottom: 0,
+                padding: 0,
+                overflow: "hidden",
+                cursor: slip ? "pointer" : "default",
+                transition: "box-shadow 0.15s, border-color 0.15s",
+              }}
+              onClick={() => slip && setViewing(ph)}
+              title={slip ? "Open this slip" : undefined}
+              onMouseEnter={(e) => {
+                if (!slip) return;
+                e.currentTarget.style.borderColor = BRAND.gold;
+                e.currentTarget.style.boxShadow = "0 2px 12px rgba(0,0,0,0.08)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = BRAND.border;
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              <div
+                style={{
+                  height: 190, background: BRAND.greyLight, display: "flex", alignItems: "center",
+                  justifyContent: "center", overflow: "hidden", borderBottom: `1px solid ${BRAND.border}`,
+                }}
+              >
+                {slip ? (
+                  <img
+                    src={slip.image}
+                    alt={`KBZPay slip for ${ph.invoiceNumber}`}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }}
+                  />
+                ) : (
+                  <div style={{ textAlign: "center", fontSize: 12, color: BRAND.grey, padding: 16 }}>
+                    {missing ? "🚫 No slip on file" : error ? `⚠️ ${error}` : "Loading slip…"}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ padding: "12px 16px 14px" }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: BRAND.green }}>{fmtMMK(ph.amount)}</div>
+                <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 2 }}>Paid {fmtDate(ph.paidDate)}</div>
+                <div style={{ ...S.flexBetween, marginTop: 8, gap: 8 }}>
+                  <span style={{ fontFamily: "monospace", fontSize: 11 }}>{ph.invoiceNumber}</span>
+                  <span style={S.badge(BRAND.crimson, BRAND.redLight)}>{ph.kind === "registration" ? "Registration" : "#" + ph.paymentCount}</span>
+                </div>
+                {ph.periodStart && (
+                  <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 6 }}>
+                    {fmtPeriod(ph.periodStart, ph.periodEnd)}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {viewing && (
+        <SlipViewer
+          payment={viewing}
+          slip={slipCache.get(viewing.id)}
+          onClose={() => setViewing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TransactionsPage({ paymentHistory, students, batches }) {
+  const [search, setSearch] = useState("");
+  const [filterBatch, setFilterBatch] = useState("all");
+  const [openStudentId, setOpenStudentId] = useState(null);
+  // Fetched slip images, kept across card open/close for the life of the tab.
+  const slipCache = useRef(new Map()).current;
+
+  const studentsById = useMemo(
+    () => Object.fromEntries(students.map((s) => [s.id, s])),
+    [students]
+  );
+
+  const groups = useMemo(() => {
+    const byStudent = new Map();
+    for (const ph of paymentHistory) {
+      if (!byStudent.has(ph.studentId)) byStudent.set(ph.studentId, []);
+      byStudent.get(ph.studentId).push(ph);
+    }
+    return [...byStudent.entries()]
+      .map(([studentId, payments]) => {
+        const sorted = payments
+          .slice()
+          .sort((a, b) => (b.paidDate || "").localeCompare(a.paidDate || ""));
+        const student = studentsById[studentId];
+        const latest = sorted[0];
+        return {
+          studentId,
+          name: latest.studentName,
+          nameBurmese: latest.nameBurmese || (student ? student.nameBurmese : "") || "",
+          batchId: latest.batchId,
+          batchName: latest.batchName || "—",
+          payments: sorted,
+          slipCount: sorted.filter(hasSlip).length,
+          total: sorted.reduce((sum, p) => sum + p.amount, 0),
+          lastPaid: latest.paidDate,
+        };
+      })
+      .sort((a, b) => (b.lastPaid || "").localeCompare(a.lastPaid || ""));
+  }, [paymentHistory, studentsById]);
+
+  const filtered = groups.filter((g) => {
+    if (filterBatch !== "all" && g.batchId !== filterBatch) return false;
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return g.name.toLowerCase().includes(s) || g.nameBurmese.toLowerCase().includes(s);
+  });
+
+  const open = openStudentId ? groups.find((g) => g.studentId === openStudentId) : null;
+  if (open) {
+    return <StudentSlips group={open} slipCache={slipCache} onBack={() => setOpenStudentId(null)} />;
+  }
+
+  const totalSlips = groups.reduce((sum, g) => sum + g.slipCount, 0);
+
+  return (
+    <div>
+      <div style={S.pageTitle}>Transactions</div>
+      <div style={S.pageDesc}>KBZPay slips filed against payments — pick a student to see theirs</div>
+
+      <div style={S.statsRow}>
+        <div style={S.statCard(BRAND.crimson)}>
+          <div style={S.statNum}>{filtered.length}</div>
+          <div style={S.statLabel}>Students Shown</div>
+        </div>
+        <div style={S.statCard(BRAND.green)}>
+          <div style={S.statNum}>{totalSlips}</div>
+          <div style={S.statLabel}>Slips On File</div>
+        </div>
+      </div>
+
+      <div style={S.toolbar}>
+        <div style={S.searchBox}>
+          <span style={S.searchIcon}>{ICONS.search}</span>
+          <input
+            style={S.searchInput}
+            placeholder="Search by student name..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <select
+          style={{ ...S.select, width: "auto", minWidth: 160 }}
+          value={filterBatch}
+          onChange={(e) => setFilterBatch(e.target.value)}
+        >
+          <option value="all">All Batches</option>
+          {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={S.card}>
+          <EmptyState
+            icon="📸"
+            message={
+              groups.length === 0
+                ? "No payments recorded yet. Slips appear here once invoices are marked paid."
+                : "No students match that search."
+            }
+          />
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 20 }}>
+          {filtered.map((g) => (
+            <div
+              key={g.studentId}
+              onClick={() => setOpenStudentId(g.studentId)}
+              title="Open this student's slips"
+              style={{ ...S.card, marginBottom: 0, cursor: "pointer", transition: "box-shadow 0.15s, border-color 0.15s" }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = BRAND.gold;
+                e.currentTarget.style.boxShadow = "0 2px 12px rgba(0,0,0,0.08)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = BRAND.border;
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 16 }}>{g.name}</div>
+              {g.nameBurmese && <div style={{ fontSize: 13 }}>{g.nameBurmese}</div>}
+              <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 2 }}>{g.batchName}</div>
+
+              <div style={{ ...S.flexBetween, marginTop: 14, gap: 8 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: BRAND.green }}>{fmtMMK(g.total)}</div>
+                  <div style={{ fontSize: 11, color: BRAND.grey }}>Last paid {fmtDate(g.lastPaid)}</div>
+                </div>
+                <span style={S.badge(BRAND.crimson, BRAND.redLight)}>
+                  📸 {g.slipCount}/{g.payments.length}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1786,9 +2120,15 @@ export default function OwnerSMS({ onLogout }) {
       setData((prev) => ({ ...prev, students: prev.students.map((s) => s.id === studentData.id ? updated : s) }));
       return updated;
     } else {
-      const created = await api.createStudent(studentData);
-      setData((prev) => ({ ...prev, students: [...prev.students, created] }));
-      return created;
+      // Registering also records the first payment, so both come back together and the
+      // form uses the payment to draw the receipt.
+      const { student, payment } = await api.createStudent(studentData);
+      setData((prev) => ({
+        ...prev,
+        students: [...prev.students, student],
+        paymentHistory: [payment, ...prev.paymentHistory],
+      }));
+      return { ...student, payment };
     }
   }
 
@@ -1840,8 +2180,8 @@ export default function OwnerSMS({ onLogout }) {
   }
 
   // ── Invoice handlers ──
-  async function handleMarkPaid(id) {
-    const result = await api.markInvoicePaid(id);
+  async function handleMarkPaid(id, payment) {
+    const result = await api.markInvoicePaid(id, payment);
     setData((prev) => {
       // Remove the paid invoice; optionally append the newly generated next invoice
       const invoices = prev.invoices.filter((i) => i.id !== result.deletedInvoiceId);
@@ -1851,6 +2191,8 @@ export default function OwnerSMS({ onLogout }) {
         paymentHistory: [result.history, ...prev.paymentHistory],
       };
     });
+    // Handed back so the invoices page can receipt the payment it just recorded.
+    return result.history;
   }
 
   async function handleDeleteInvoice(id) {
@@ -1993,6 +2335,13 @@ export default function OwnerSMS({ onLogout }) {
         batches={data.batches}
         onDelete={handleDeletePaymentHistory}
         onUpdate={handleUpdatePaymentHistory}
+      />
+    ),
+    Transactions: (
+      <TransactionsPage
+        paymentHistory={data.paymentHistory}
+        students={data.students}
+        batches={data.batches}
       />
     ),
     "Fee Tracker": (

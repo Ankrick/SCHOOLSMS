@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import html2canvas from "html2canvas";
 import * as api from "../api";
 import { StudentsPage } from "./StudentsBatches";
+import { MarkPaidModal, SlipViewer } from "./PaymentSlip";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────
 const BRAND = {
@@ -176,6 +177,10 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
   const [dueDateTo, setDueDateTo] = useState("");
   const [preview, setPreview] = useState(null);
   const [showGenerate, setShowGenerate] = useState(false);
+  // The invoices a slip is currently being attached to — one row, or a bulk selection.
+  const [payTarget, setPayTarget] = useState(null);
+  // The payments just recorded, receipted as soon as the slip dialog closes.
+  const [receipts, setReceipts] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [statusSort, setStatusSort] = useState(null); // null | "outstanding" | "paid"
 
@@ -233,12 +238,41 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
     }
   }
 
-  async function markPaid(id) {
+  // Settling an invoice runs through the slip modal — the KBZPay screenshot and the paid
+  // date from it are both required before anything is recorded.
+  function markPaid(inv) {
+    setPayTarget([inv]);
+  }
+
+  // Applies one slip to everything it covers, sequentially rather than in parallel: the
+  // server derives each payment's number and the next invoice number from what is already
+  // stored, so overlapping requests for the same student would collide.
+  async function confirmPayment(payment) {
+    const target = payTarget || [];
+    const settled = [];
+    const recorded = [];
     try {
-      await onMarkPaid(id);
-    } catch (err) {
-      alert(err.message);
+      for (const inv of target) {
+        recorded.push(await onMarkPaid(inv.id, payment));
+        settled.push(inv.id);
+      }
+    } finally {
+      // Whatever went through stays through, even if a later one fails — the modal reports
+      // the failure and the selection is left holding only what still needs paying.
+      if (settled.length) {
+        setSelected((prev) => {
+          const next = new Set(prev);
+          settled.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
     }
+    setPayTarget(null);
+    // Same courtesy as registering a student: the payer gets a receipt on the spot, drawn
+    // from the record the server wrote rather than from what was typed into the form. A
+    // failed run leaves this alone — the receipts for whatever did go through are still on
+    // their rows in Payment History.
+    if (recorded.length) setReceipts(recorded.filter(Boolean));
   }
 
   async function deleteInvoice(id) {
@@ -266,15 +300,12 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
     );
   }
 
-  async function bulkMarkPaid() {
+  // One transfer often settles several months at once, so a bulk selection asks for a
+  // single slip and files the same receipt against each invoice.
+  function bulkMarkPaid() {
     const toMark = filtered.filter((i) => selected.has(i.id) && (i.status === "Unpaid" || i.status === "Overdue"));
     if (toMark.length === 0) return alert("No unpaid invoices in the selection.");
-    try {
-      await Promise.all(toMark.map((i) => onMarkPaid(i.id)));
-      setSelected(new Set());
-    } catch (err) {
-      alert(err.message);
-    }
+    setPayTarget(toMark);
   }
 
   async function bulkDelete() {
@@ -441,7 +472,7 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setPreview(inv)} title="Preview">👁️</button>
                         {(inv.status === "Unpaid" || inv.status === "Overdue") && (
-                          <button style={S.btn("success")} onClick={() => markPaid(inv.id)}>Mark Paid</button>
+                          <button style={S.btn("success")} onClick={() => markPaid(inv)}>Mark Paid</button>
                         )}
                         <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => deleteInvoice(inv.id)}>🗑️</button>
                       </div>
@@ -473,6 +504,41 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
             <button style={S.btn("gold")} onClick={generateMonthlyInvoices}>Generate Now</button>
           </div>
         </Modal>
+      )}
+
+      {receipts && receipts.length > 0 && (
+        <Modal
+          title={
+            receipts.length === 1
+              ? `Receipt — ${receipts[0].studentName}`
+              : `Receipts — ${receipts.length} payments`
+          }
+          onClose={() => setReceipts(null)}
+        >
+          {receipts.map((ph, i) => (
+            <div
+              key={ph.id}
+              style={
+                i === 0
+                  ? undefined
+                  : { marginTop: 24, paddingTop: 24, borderTop: `1px solid ${BRAND.border}` }
+              }
+            >
+              <ReceiptPreview payment={ph} />
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+            <button style={S.btn("secondary")} onClick={() => setReceipts(null)}>Done</button>
+          </div>
+        </Modal>
+      )}
+
+      {payTarget && (
+        <MarkPaidModal
+          invoices={payTarget}
+          onCancel={() => setPayTarget(null)}
+          onConfirm={confirmPayment}
+        />
       )}
 
       {preview && (
@@ -704,6 +770,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [receipt, setReceipt] = useState(null);
+  const [slipFor, setSlipFor] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editDate, setEditDate] = useState("");
   const [savingDate, setSavingDate] = useState(false);
@@ -846,11 +913,14 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
                       )}
                     </td>
                     <td style={S.td} data-label="Payment #">
-                      <span style={S.badge(BRAND.crimson, BRAND.redLight)}>#{ph.paymentCount}</span>
+                      <span style={S.badge(BRAND.crimson, BRAND.redLight)}>{ph.kind === "registration" ? "Registration" : "#" + ph.paymentCount}</span>
                     </td>
                     <td style={S.td} data-label="Actions">
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setReceipt(ph)} title="Generate Receipt">🧾 Receipt</button>
+                        {ph.slip && ph.slip.attachedAt && (
+                          <button style={S.btn("small")} onClick={() => setSlipFor(ph)} title="View the KBZPay slip for this payment">📎 Slip</button>
+                        )}
                         <button
                           style={{ ...S.btn("small"), color: BRAND.red }}
                           onClick={() => {
@@ -874,6 +944,10 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
         <Modal title="Payment Receipt" onClose={() => setReceipt(null)}>
           <ReceiptPreview payment={receipt} />
         </Modal>
+      )}
+
+      {slipFor && (
+        <SlipViewer payment={slipFor} loadSlip={api.getPaymentSlip} onClose={() => setSlipFor(null)} />
       )}
     </div>
   );
@@ -926,9 +1000,17 @@ export default function TitanSMS({ onLogout }) {
         ...prev,
         students: prev.students.map((s) => (s.id === updated.id ? updated : s)),
       }));
+      return updated;
     } else {
-      const created = await api.createStudent(form);
-      setData((prev) => ({ ...prev, students: [...prev.students, created] }));
+      // Registering also records the first payment, so both come back together and the
+      // form uses the payment to draw the receipt.
+      const { student, payment } = await api.createStudent(form);
+      setData((prev) => ({
+        ...prev,
+        students: [...prev.students, student],
+        paymentHistory: [payment, ...prev.paymentHistory],
+      }));
+      return { ...student, payment };
     }
   }
 
@@ -972,8 +1054,8 @@ export default function TitanSMS({ onLogout }) {
   }
 
   // ── Invoice handlers ──
-  async function handleMarkPaid(id) {
-    const result = await api.markInvoicePaid(id);
+  async function handleMarkPaid(id, payment) {
+    const result = await api.markInvoicePaid(id, payment);
     setData((prev) => {
       // Remove the paid invoice; optionally append the newly generated next invoice
       const invoices = prev.invoices.filter((i) => i.id !== result.deletedInvoiceId);
@@ -983,6 +1065,8 @@ export default function TitanSMS({ onLogout }) {
         paymentHistory: [result.history, ...prev.paymentHistory],
       };
     });
+    // Handed back so the invoices page can receipt the payment it just recorded.
+    return result.history;
   }
 
   async function handleDeleteInvoice(id) {
@@ -1047,6 +1131,7 @@ export default function TitanSMS({ onLogout }) {
         onRemoveStrike={handleRemoveStrike}
         onSaveBatch={handleSaveBatch}
         onDeleteBatch={handleDeleteBatch}
+        receiptRenderer={(payment) => <ReceiptPreview payment={payment} />}
       />
     ),
     Invoices: (
