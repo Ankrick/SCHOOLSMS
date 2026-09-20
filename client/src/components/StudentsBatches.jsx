@@ -6,6 +6,9 @@
 // than forked into separate components:
 //   teachers        - when non-empty, the batch form can assign a teacher + commission.
 //   receiptRenderer - when supplied, creating a student offers a first-payment receipt.
+//   revenueByBatch  - when supplied ({ batchId: monthly total }), each batch card shows what
+//                     it bills in a month. Owner-only: the shell decides who gets this by
+//                     deciding whether to compute and pass it at all.
 
 import { useState, useMemo, Fragment } from "react";
 import { SlipFields, SlipMissingNote, emptySlipPayment, isSlipComplete } from "./PaymentSlip";
@@ -453,6 +456,7 @@ export function StudentsPage({
   onSaveStudent, onDeleteStudent, onAddStrike, onRemoveStrike,
   onSaveBatch, onDeleteBatch,
   receiptRenderer,
+  revenueByBatch,
 }) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("Active");
@@ -612,6 +616,11 @@ export function StudentsPage({
                     <div style={{ fontSize: 13, color: BRAND.grey }}>
                       Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(batch.fee)}</strong>/month
                     </div>
+                    {revenueByBatch && (
+                      <div style={{ fontSize: 13, color: BRAND.grey, marginTop: 4 }}>
+                        Revenue: <strong style={{ color: BRAND.green }}>{fmtMMK(revenueByBatch[batch.id] || 0)}</strong>/month
+                      </div>
+                    )}
                     {batch.examDate && (
                       <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 4 }}>Exam: {fmtDate(batch.examDate)}</div>
                     )}

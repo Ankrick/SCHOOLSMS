@@ -1,5 +1,4 @@
 const PaymentHistory = require("../models/PaymentHistory");
-const Invoice = require("../models/Invoice");
 
 exports.getPaymentHistory = async (req, res, next) => {
   try {
@@ -51,18 +50,9 @@ exports.deletePaymentHistory = async (req, res, next) => {
     const record = await PaymentHistory.findByIdAndDelete(req.params.id);
     if (!record) return res.status(404).json({ message: "Payment record not found" });
 
-    // Remove the next invoice that was auto-generated when this payment was recorded.
-    // A registration fee never generated one, so it must not go hunting by date and take
-    // an unrelated invoice that happens to have been issued the same day.
-    const deleted =
-      record.kind === "registration"
-        ? null
-        : await Invoice.findOneAndDelete({
-            studentId: record.studentId,
-            issueDate: record.paidDate,
-          });
-
-    res.json({ deleted: record, deletedInvoiceId: deleted ? deleted.id : null });
+    // Nothing else to undo: dues are derived, so removing the payment simply puts that
+    // period back on the books as unpaid.
+    res.json({ deleted: record });
   } catch (err) {
     next(err);
   }

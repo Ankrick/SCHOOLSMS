@@ -71,20 +71,16 @@ export const createBatch = (data) => api.post("/batches", data).then(handle).cat
 export const updateBatch = (id, data) => api.put(`/batches/${id}`, data).then(handle).catch(err);
 export const deleteBatch = (id) => api.delete(`/batches/${id}`).then(handle).catch(err);
 
-// Invoices
-export const getInvoices = () => api.get("/invoices").then(handle).catch(err);
-export const createInvoice = (data) => api.post("/invoices", data).then(handle).catch(err);
-export const updateInvoice = (id, data) => api.put(`/invoices/${id}`, data).then(handle).catch(err);
-export const deleteInvoice = (id) => api.delete(`/invoices/${id}`).then(handle).catch(err);
-// `payment` is { paidDate, slip } read off the attached KBZPay receipt — the server
-// refuses to settle an invoice without it. The slip image makes this request far heavier
-// than the rest, so it gets a longer leash than the shared 20s timeout.
-export const markInvoicePaid = (id, payment) =>
-  api.patch(`/invoices/${id}/pay`, payment, { timeout: 60000 }).then(handle).catch(err);
-export const generateMonthlyInvoices = () =>
-  api.post("/invoices/generate").then(handle).catch(err);
-export const markInvoicesOverdue = () =>
-  api.patch("/invoices/mark-overdue").then(handle).catch(err);
+// Dues — what each month costs and what has been collected against it. Derived from the
+// students' billing schedules, so there is nothing to generate: ask for any month, including
+// ones still ahead, and the answer is already there.
+export const getDues = (from, to) =>
+  api.get("/dues", { params: { from, to } }).then(handle).catch(err);
+// `payment` is { studentId, periodStart, paidDate, slip } — the period being settled plus
+// the KBZPay receipt the server refuses to record money without. The slip image makes this
+// request far heavier than the rest, so it gets a longer leash than the shared 20s timeout.
+export const payDue = (payment) =>
+  api.patch("/dues/pay", payment, { timeout: 60000 }).then(handle).catch(err);
 
 // Leads
 export const getLeads = () => api.get("/leads").then(handle).catch(err);

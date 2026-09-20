@@ -170,24 +170,63 @@ function EmptyState({ icon, message, action }) {
 }
 
 // ─── INVOICES ────────────────────────────────────────────────────
-function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDeleteInvoice, onGenerateInvoices }) {
+// What a month costs and who has not paid it yet.
+//
+// Nothing is generated here. Every active student owes their fee for one month starting on
+// their billing day, so any month — this one, last one, next March — can simply be asked
+// for. That is what makes the totals a forecast rather than a record of whatever someone
+// remembered to create, and it is why there is no "generate" button any more.
+const thisMonth = () => new Date().toISOString().split("T")[0].slice(0, 7);
+
+const shiftMonth = (mk, n) => {
+  const [y, m] = mk.split("-").map(Number);
+  const total = y * 12 + (m - 1) + n;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+};
+
+const monthLabel = (mk) =>
+  new Date(mk + "-01T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+
+const EMPTY_TOTALS = { expected: 0, collected: 0, outstanding: 0, studentsLeft: 0, overdue: 0 };
+
+function InvoicesPage({ students, batches, settings, initialDues, initialTotals, onPaymentRecorded }) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
-  const [dueDateFrom, setDueDateFrom] = useState("");
-  const [dueDateTo, setDueDateTo] = useState("");
+  const [filterBatch, setFilterBatch] = useState("all");
+  const [fromMonth, setFromMonth] = useState(thisMonth);
+  const [toMonth, setToMonth] = useState(thisMonth);
+  const [dues, setDues] = useState(() => initialDues || []);
+  const [totals, setTotals] = useState(() => initialTotals || EMPTY_TOTALS);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [preview, setPreview] = useState(null);
-  const [showGenerate, setShowGenerate] = useState(false);
-  // The invoices a slip is currently being attached to — one row, or a bulk selection.
   const [payTarget, setPayTarget] = useState(null);
-  // The payments just recorded, receipted as soon as the slip dialog closes.
   const [receipts, setReceipts] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [statusSort, setStatusSort] = useState(null); // null | "outstanding" | "paid"
 
-  // Clear selection whenever the visible list changes
-  useEffect(() => setSelected(new Set()), [search, filterStatus, dueDateFrom, dueDateTo]);
+  const singleMonth = fromMonth === toMonth;
 
-  const hasDateFilter = dueDateFrom || dueDateTo;
+  // The months on screen are the only thing fetched, so stepping to next March costs one
+  // small request rather than carrying a year of rows around.
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setLoadError(null);
+    api
+      .getDues(fromMonth, toMonth)
+      .then((res) => {
+        if (!live) return;
+        setDues(res.dues);
+        setTotals(res.totals);
+      })
+      .catch((err) => live && setLoadError(err.message))
+      .finally(() => live && setLoading(false));
+    return () => { live = false; };
+  }, [fromMonth, toMonth, reloadKey]);
+
+  useEffect(() => setSelected(new Set()), [search, filterStatus, filterBatch, fromMonth, toMonth]);
 
   const studentsById = useMemo(
     () => Object.fromEntries(students.map((s) => [s.id, s])),
@@ -200,19 +239,20 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
 
   const STATUS_PRIORITY = { Overdue: 0, Unpaid: 1, Paid: 2 };
 
-  const filtered = invoices
-    .filter((inv) => {
-      if (filterStatus !== "all" && inv.status !== filterStatus) return false;
-      if (dueDateFrom && inv.dueDate && inv.dueDate < dueDateFrom) return false;
-      if (dueDateTo && inv.dueDate && inv.dueDate > dueDateTo) return false;
+  const filtered = dues
+    .filter((due) => {
+      if (filterBatch !== "all" && due.batchId !== filterBatch) return false;
+      if (filterStatus === "outstanding" && due.status === "Paid") return false;
+      if (filterStatus !== "all" && filterStatus !== "outstanding" && due.status !== filterStatus) return false;
       if (search) {
-        const s = search.toLowerCase();
-        const student = studentsById[inv.studentId];
+        const q = search.toLowerCase();
+        const student = studentsById[due.studentId];
         const contact = student?.invoiceContact || student?.parentName || "";
         return (
-          inv.invoiceNumber.toLowerCase().includes(s) ||
-          inv.studentName.toLowerCase().includes(s) ||
-          contact.toLowerCase().includes(s)
+          due.studentName.toLowerCase().includes(q) ||
+          (due.nameBurmese || "").toLowerCase().includes(q) ||
+          contact.toLowerCase().includes(q) ||
+          (due.invoiceNumber || "").toLowerCase().includes(q)
         );
       }
       return true;
@@ -224,65 +264,24 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
         const diff = statusSort === "outstanding" ? pa - pb : pb - pa;
         if (diff !== 0) return diff;
       }
-      return new Date(b.issueDate) - new Date(a.issueDate);
+      return a.dueDate.localeCompare(b.dueDate) || a.studentName.localeCompare(b.studentName);
     });
 
-  async function generateMonthlyInvoices() {
-    try {
-      const count = await onGenerateInvoices();
-      setShowGenerate(false);
-      alert(`${count} invoice${count !== 1 ? "s" : ""} generated.`);
-    } catch (err) {
-      setShowGenerate(false);
-      alert(err.message);
-    }
-  }
-
-  // Settling an invoice runs through the slip modal — the KBZPay screenshot and the paid
-  // date from it are both required before anything is recorded.
-  function markPaid(inv) {
-    setPayTarget([inv]);
-  }
-
-  // Applies one slip to everything it covers, sequentially rather than in parallel: the
-  // server derives each payment's number and the next invoice number from what is already
-  // stored, so overlapping requests for the same student would collide.
-  async function confirmPayment(payment) {
-    const target = payTarget || [];
-    const settled = [];
-    const recorded = [];
-    try {
-      for (const inv of target) {
-        recorded.push(await onMarkPaid(inv.id, payment));
-        settled.push(inv.id);
+  // Totals follow the filter, so narrowing to one batch or to the unpaid rows answers
+  // "how much is that worth" without arithmetic.
+  const shown = {
+    expected: filtered.reduce((sum, d) => sum + d.amount, 0),
+    collected: filtered.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
+  };
+  const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all";
+  const view = isFiltered
+    ? {
+        expected: shown.expected,
+        collected: shown.collected,
+        outstanding: shown.expected - shown.collected,
+        studentsLeft: new Set(filtered.filter((d) => d.status !== "Paid").map((d) => d.studentId)).size,
       }
-    } finally {
-      // Whatever went through stays through, even if a later one fails — the modal reports
-      // the failure and the selection is left holding only what still needs paying.
-      if (settled.length) {
-        setSelected((prev) => {
-          const next = new Set(prev);
-          settled.forEach((id) => next.delete(id));
-          return next;
-        });
-      }
-    }
-    setPayTarget(null);
-    // Same courtesy as registering a student: the payer gets a receipt on the spot, drawn
-    // from the record the server wrote rather than from what was typed into the form. A
-    // failed run leaves this alone — the receipts for whatever did go through are still on
-    // their rows in Payment History.
-    if (recorded.length) setReceipts(recorded.filter(Boolean));
-  }
-
-  async function deleteInvoice(id) {
-    if (!confirm("Delete this invoice?")) return;
-    try {
-      await onDeleteInvoice(id);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
+    : totals;
 
   function toggleSelect(id) {
     setSelected((prev) => {
@@ -292,113 +291,169 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
     });
   }
 
+  const selectable = filtered.filter((d) => d.status !== "Paid");
+  const allSelected = selectable.length > 0 && selectable.every((d) => selected.has(d.id));
+
   function toggleSelectAll() {
-    setSelected(
-      selected.size === filtered.length && filtered.length > 0
-        ? new Set()
-        : new Set(filtered.map((i) => i.id))
-    );
+    setSelected(allSelected ? new Set() : new Set(selectable.map((d) => d.id)));
   }
 
-  // One transfer often settles several months at once, so a bulk selection asks for a
-  // single slip and files the same receipt against each invoice.
+  // Settling runs through the slip modal — the KBZPay screenshot and the paid date from it
+  // are both required before anything is recorded.
+  function markPaid(due) {
+    setPayTarget([due]);
+  }
+
   function bulkMarkPaid() {
-    const toMark = filtered.filter((i) => selected.has(i.id) && (i.status === "Unpaid" || i.status === "Overdue"));
-    if (toMark.length === 0) return alert("No unpaid invoices in the selection.");
+    const toMark = filtered.filter((d) => selected.has(d.id) && d.status !== "Paid");
+    if (toMark.length === 0) return alert("No unpaid fees in the selection.");
     setPayTarget(toMark);
   }
 
-  async function bulkDelete() {
-    if (!confirm(`Delete ${selected.size} selected invoice${selected.size !== 1 ? "s" : ""}? This cannot be undone.`)) return;
+  // One slip can settle several months or several students. They go one after another
+  // rather than in parallel: each payment takes the next receipt number, and overlapping
+  // requests would race for it.
+  async function confirmPayment(payment) {
+    const target = payTarget || [];
+    const recorded = [];
     try {
-      await Promise.all([...selected].map((id) => onDeleteInvoice(id)));
-      setSelected(new Set());
-    } catch (err) {
-      alert(err.message);
+      for (const due of target) {
+        const { payment: saved } = await api.payDue({
+          studentId: due.studentId,
+          periodStart: due.periodStart,
+          ...payment,
+        });
+        recorded.push(saved);
+        if (onPaymentRecorded) onPaymentRecorded(saved);
+      }
+    } finally {
+      if (recorded.length) {
+        setSelected(new Set());
+        setReloadKey((n) => n + 1);
+      }
     }
+    setPayTarget(null);
+    // Same courtesy as registering a student: a receipt on the spot, drawn from the record
+    // the server wrote rather than from what was typed into the form.
+    if (recorded.length) setReceipts(recorded);
   }
 
-  const allSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
-
-  // Eligible-for-next-invoice count mirrors server logic
-  let toInvoiceCount = 0;
-  let examExcludedCount = 0;
-  for (const s of students) {
-    if (s.status !== "Active") continue;
-    const studentInvs = invoices.filter((i) => i.studentId === s.id);
-    if (studentInvs.some((i) => i.status === "Unpaid" || i.status === "Overdue")) continue;
-    const lastInv = studentInvs.slice().sort((a, b) =>
-      (b.periodEnd || b.dueDate || "").localeCompare(a.periodEnd || a.dueDate || "")
-    )[0];
-    const periodStart = lastInv
-      ? (lastInv.periodEnd || lastInv.dueDate)
-      : (s.billingStartDate || s.enrolledDate || today());
-    const batch = batches.find((b) => b.id === s.batchId);
-    if (batch && batch.examDate && periodStart.slice(0, 7) > batch.examDate.slice(0, 7)) {
-      examExcludedCount++;
-    } else {
-      toInvoiceCount++;
-    }
-  }
+  const rangeLabel = singleMonth
+    ? monthLabel(fromMonth)
+    : `${monthLabel(fromMonth)} – ${monthLabel(toMonth)}`;
 
   return (
     <div>
       <div style={S.pageTitle} className="page-title">Invoices</div>
-      <div style={S.pageDesc}>Auto-generated monthly invoices — minimal manual work</div>
+      <div style={S.pageDesc}>
+        Who still owes for {rangeLabel}
+        {filterBatch !== "all" && ` · ${(batches || []).find((b) => b.id === filterBatch)?.name || ""}`}
+        {" — the schedule follows each student's billing date, so nothing needs generating and any month can be looked at"}
+      </div>
+
+      <div style={S.statsRow}>
+        <div style={S.statCard(BRAND.crimson)}>
+          <div style={S.statNum}>{view.studentsLeft}</div>
+          <div style={S.statLabel}>Students Left To Pay</div>
+        </div>
+        <div style={S.statCard(BRAND.orange)}>
+          <div style={S.statNum}>{fmtMMK(view.outstanding)}</div>
+          <div style={S.statLabel}>Still To Collect</div>
+        </div>
+        <div style={S.statCard(BRAND.green)}>
+          <div style={S.statNum}>{fmtMMK(view.collected)}</div>
+          <div style={S.statLabel}>Collected</div>
+        </div>
+        <div style={S.statCard(BRAND.gold)}>
+          <div style={S.statNum}>{fmtMMK(view.expected)}</div>
+          <div style={S.statLabel}>Expected In Total</div>
+        </div>
+      </div>
 
       <div style={S.toolbar} className="toolbar">
         <div style={S.searchBox}>
           <span style={S.searchIcon}>{ICONS.search}</span>
-          <input style={S.searchInput} placeholder="Search invoices..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input style={S.searchInput} placeholder="Search students..." value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <select style={{ ...S.select, width: "auto", minWidth: 120 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+        <select style={{ ...S.select, width: "auto", minWidth: 140 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All Status</option>
+          <option value="outstanding">Left to pay</option>
           <option value="Unpaid">Unpaid</option>
-          <option value="Paid">Paid</option>
           <option value="Overdue">Overdue</option>
+          <option value="Paid">Paid</option>
+        </select>
+        <select style={{ ...S.select, width: "auto", minWidth: 160 }} value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)}>
+          <option value="all">All Batches</option>
+          {(batches || []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }} className="date-filter-row">
-          <span style={{ fontSize: 12, color: BRAND.grey, whiteSpace: "nowrap" }}>Due:</span>
+          <button
+            style={{ ...S.btn("small"), padding: "6px 10px" }}
+            onClick={() => { setFromMonth(shiftMonth(fromMonth, -1)); setToMonth(shiftMonth(toMonth, -1)); }}
+            title="Previous month"
+          >◀</button>
           <input
-            style={{ ...S.input, width: 140, fontSize: 13 }}
-            type="date"
-            value={dueDateFrom}
-            onChange={(e) => setDueDateFrom(e.target.value)}
-            title="Due date from"
+            style={{ ...S.input, width: 150, fontSize: 13 }}
+            type="month"
+            value={fromMonth}
+            onChange={(e) => {
+              const v = e.target.value || thisMonth();
+              setFromMonth(v);
+              if (v > toMonth) setToMonth(v);
+            }}
+            title="From month"
           />
           <span style={{ fontSize: 12, color: BRAND.grey }}>–</span>
           <input
-            style={{ ...S.input, width: 140, fontSize: 13 }}
-            type="date"
-            value={dueDateTo}
-            onChange={(e) => setDueDateTo(e.target.value)}
-            title="Due date to"
+            style={{ ...S.input, width: 150, fontSize: 13 }}
+            type="month"
+            value={toMonth}
+            onChange={(e) => {
+              const v = e.target.value || thisMonth();
+              setToMonth(v);
+              if (v < fromMonth) setFromMonth(v);
+            }}
+            title="To month — set it ahead to forecast"
           />
-          {hasDateFilter && (
+          <button
+            style={{ ...S.btn("small"), padding: "6px 10px" }}
+            onClick={() => { setFromMonth(shiftMonth(fromMonth, 1)); setToMonth(shiftMonth(toMonth, 1)); }}
+            title="Next month"
+          >▶</button>
+          {(fromMonth !== thisMonth() || toMonth !== thisMonth()) && (
             <button
-              style={{ ...S.btn("small"), color: BRAND.red, padding: "4px 8px" }}
-              onClick={() => { setDueDateFrom(""); setDueDateTo(""); }}
-              title="Clear date filter"
-            >✕</button>
+              style={S.btn("small")}
+              onClick={() => { setFromMonth(thisMonth()); setToMonth(thisMonth()); }}
+              title="Back to this month"
+            >This month</button>
           )}
         </div>
-        <button style={S.btn("gold")} onClick={() => setShowGenerate(true)}>{ICONS.money} Generate Monthly Invoices</button>
       </div>
 
       {selected.size > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", background: BRAND.blueLight, border: `1px solid ${BRAND.blue}22`, borderRadius: 8, marginBottom: 16, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: BRAND.blue }}>{selected.size} selected</span>
           <button style={S.btn("success")} onClick={bulkMarkPaid}>✅ Mark Paid</button>
-          <button style={S.btn("danger")} onClick={bulkDelete}>🗑️ Delete</button>
           <button style={{ ...S.btn("secondary"), marginLeft: "auto" }} onClick={() => setSelected(new Set())}>Clear</button>
         </div>
       )}
 
       <div style={S.card} className="card">
-        {filtered.length === 0 ? (
-          <EmptyState icon="🧾" message="No invoices yet" action={<button style={S.btn("gold")} onClick={() => setShowGenerate(true)}>Generate Invoices</button>} />
+        {loadError ? (
+          <EmptyState icon="⚠️" message={loadError} action={<button style={S.btn("secondary")} onClick={() => setReloadKey((n) => n + 1)}>Try again</button>} />
+        ) : loading && dues.length === 0 ? (
+          <div style={{ fontSize: 13, color: BRAND.grey, padding: "24px 0", textAlign: "center" }}>Working out what is owed…</div>
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon="🧾"
+            message={
+              dues.length === 0
+                ? `Nothing is billed for ${rangeLabel}. Active students are billed from their own billing date.`
+                : "No fees match the current filter."
+            }
+          />
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ overflowX: "auto", opacity: loading ? 0.6 : 1, transition: "opacity 0.15s" }}>
             <table style={S.table} className="data-table">
               <thead>
                 <tr>
@@ -408,10 +463,9 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                       checked={allSelected}
                       onChange={toggleSelectAll}
                       style={{ cursor: "pointer", width: 15, height: 15 }}
-                      title="Select all"
+                      title="Select everything still to pay"
                     />
                   </th>
-                  <th style={S.th}>Invoice #</th>
                   <th style={S.th}>Student</th>
                   <th style={S.th}>Guardian fb contact</th>
                   <th style={S.th}>Batch</th>
@@ -429,26 +483,30 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((inv) => (
+                {filtered.map((due) => (
                   <tr
-                    key={inv.id}
-                    style={{ background: selected.has(inv.id) ? BRAND.blueLight : "transparent" }}
-                    onMouseEnter={(e) => { if (!selected.has(inv.id)) e.currentTarget.style.background = BRAND.cream; }}
-                    onMouseLeave={(e) => { if (!selected.has(inv.id)) e.currentTarget.style.background = "transparent"; }}
+                    key={due.id}
+                    style={{ background: selected.has(due.id) ? BRAND.blueLight : "transparent" }}
+                    onMouseEnter={(e) => { if (!selected.has(due.id)) e.currentTarget.style.background = BRAND.cream; }}
+                    onMouseLeave={(e) => { if (!selected.has(due.id)) e.currentTarget.style.background = "transparent"; }}
                   >
                     <td style={{ ...S.td, width: 36, paddingRight: 4 }}>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(inv.id)}
-                        onChange={() => toggleSelect(inv.id)}
-                        style={{ cursor: "pointer", width: 15, height: 15 }}
-                      />
+                      {due.status !== "Paid" && (
+                        <input
+                          type="checkbox"
+                          checked={selected.has(due.id)}
+                          onChange={() => toggleSelect(due.id)}
+                          style={{ cursor: "pointer", width: 15, height: 15 }}
+                        />
+                      )}
                     </td>
-                    <td style={{ ...S.td, fontWeight: 600, fontFamily: "monospace" }} data-label="Invoice #">{inv.invoiceNumber}</td>
-                    <td style={S.td} data-label="Student">{inv.studentName}</td>
+                    <td style={S.td} data-label="Student">
+                      <div style={{ fontWeight: 600 }}>{due.studentName}</div>
+                      {due.nameBurmese && <div style={{ fontSize: 12, color: BRAND.grey }}>{due.nameBurmese}</div>}
+                    </td>
                     <td style={S.td} data-label="Guardian fb contact">
                       {(() => {
-                        const student = studentsById[inv.studentId];
+                        const student = studentsById[due.studentId];
                         const contact = student?.invoiceContact || student?.parentName;
                         if (!contact) return <span style={{ color: BRAND.grey }}>—</span>;
                         return (
@@ -461,20 +519,24 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
                         );
                       })()}
                     </td>
-                    <td style={S.td} data-label="Batch"><span style={S.tag}>{inv.batchName}</span></td>
+                    <td style={S.td} data-label="Batch"><span style={S.tag}>{due.batchName}</span></td>
                     <td style={{ ...S.td, whiteSpace: "nowrap", fontSize: 12 }} data-label="Period">
-                      {inv.periodStart ? fmtPeriod(inv.periodStart, inv.periodEnd) : inv.monthKey}
+                      {fmtPeriod(due.periodStart, due.periodEnd)}
                     </td>
-                    <td style={S.td} data-label="Amount">{fmtMMK(inv.amount)}</td>
-                    <td style={S.td} data-label="Status"><Badge stage={inv.status} /></td>
-                    <td style={S.td} data-label="Due Date">{fmtDate(inv.dueDate)}</td>
+                    <td style={S.td} data-label="Amount">{fmtMMK(due.amount)}</td>
+                    <td style={S.td} data-label="Status">
+                      <Badge stage={due.status} />
+                      {due.status === "Paid" && due.paidDate && (
+                        <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 2 }}>{fmtDate(due.paidDate)}</div>
+                      )}
+                    </td>
+                    <td style={S.td} data-label="Due Date">{fmtDate(due.dueDate)}</td>
                     <td style={S.td} data-label="Actions">
                       <div style={{ display: "flex", gap: 4 }}>
-                        <button style={S.btn("small")} onClick={() => setPreview(inv)} title="Preview">👁️</button>
-                        {(inv.status === "Unpaid" || inv.status === "Overdue") && (
-                          <button style={S.btn("success")} onClick={() => markPaid(inv)}>Mark Paid</button>
+                        <button style={S.btn("small")} onClick={() => setPreview(due)} title="Preview the bill">👁️</button>
+                        {due.status !== "Paid" && (
+                          <button style={S.btn("success")} onClick={() => markPaid(due)}>Mark Paid</button>
                         )}
-                        <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => deleteInvoice(inv.id)}>🗑️</button>
                       </div>
                     </td>
                   </tr>
@@ -484,27 +546,6 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
           </div>
         )}
       </div>
-
-      {showGenerate && (
-        <Modal title="Generate Monthly Invoices" onClose={() => setShowGenerate(false)}>
-          <p style={{ fontSize: 14, marginBottom: 16 }}>
-            For each active student with no unpaid invoices, this generates <strong>all overdue periods</strong> since
-            their last paid invoice date (or enrollment date). Multiple catch-up invoices are created if several months have passed.
-          </p>
-          <p style={{ fontSize: 13, color: BRAND.grey, marginBottom: examExcludedCount > 0 ? 8 : 20 }}>
-            Students to invoice: <strong>{toInvoiceCount}</strong>
-          </p>
-          {examExcludedCount > 0 && (
-            <p style={{ fontSize: 13, color: BRAND.grey, marginBottom: 20, padding: "8px 12px", background: BRAND.orangeLight, borderRadius: 6 }}>
-              Excluded — exam period over: <strong style={{ color: BRAND.orange }}>{examExcludedCount}</strong> student{examExcludedCount !== 1 ? "s" : ""}
-            </p>
-          )}
-          <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-            <button style={S.btn("secondary")} onClick={() => setShowGenerate(false)}>Cancel</button>
-            <button style={S.btn("gold")} onClick={generateMonthlyInvoices}>Generate Now</button>
-          </div>
-        </Modal>
-      )}
 
       {receipts && receipts.length > 0 && (
         <Modal
@@ -535,7 +576,7 @@ function InvoicesPage({ invoices, students, batches, settings, onMarkPaid, onDel
 
       {payTarget && (
         <MarkPaidModal
-          invoices={payTarget}
+          charges={payTarget}
           onCancel={() => setPayTarget(null)}
           onConfirm={confirmPayment}
         />
@@ -565,7 +606,7 @@ function InvoicePreview({ invoice, settings }) {
         logging: false,
       });
       const link = document.createElement("a");
-      link.download = `${invoice.invoiceNumber}.png`;
+      link.download = `${invoice.invoiceNumber || `${invoice.studentName}-${invoice.monthKey}`}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     } catch (err) {
@@ -585,7 +626,9 @@ function InvoicePreview({ invoice, settings }) {
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: BRAND.charcoal }}>INVOICE</div>
-          <div style={{ fontSize: 13, color: BRAND.grey, fontFamily: "monospace" }}>{invoice.invoiceNumber}</div>
+          <div style={{ fontSize: 13, color: BRAND.grey, fontFamily: "monospace" }}>
+            {invoice.invoiceNumber || `Due ${fmtDate(invoice.dueDate)}`}
+          </div>
         </div>
       </div>
 
@@ -960,7 +1003,7 @@ export default function TitanSMS({ onLogout }) {
   // Unknown roles fall back to the most restricted tab set.
   const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.students_admin;
   const [activeTab, setActiveTab] = useState(tabs[0]);
-  const [data, setData] = useState({ students: [], batches: [], invoices: [], settings: {}, paymentHistory: [] });
+  const [data, setData] = useState({ students: [], batches: [], dues: [], duesTotals: {}, settings: {}, paymentHistory: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -974,15 +1017,16 @@ export default function TitanSMS({ onLogout }) {
           setData((prev) => ({ ...prev, students, batches }));
           return;
         }
-        await api.markInvoicesOverdue();
-        const [students, batches, invoices, settings, paymentHistory] = await Promise.all([
+        // No overdue sweep to run: a fee is late when its date has passed, which is worked
+        // out on the spot rather than stamped onto a document.
+        const [students, batches, dues, settings, paymentHistory] = await Promise.all([
           api.getStudents(),
           api.getBatches(),
-          api.getInvoices(),
+          api.getDues(),
           api.getSettings(),
           api.getPaymentHistory(),
         ]);
-        setData({ students, batches, invoices, settings, paymentHistory });
+        setData({ students, batches, dues: dues.dues, duesTotals: dues.totals, settings, paymentHistory });
       } catch (err) {
         setError(err.message);
       } finally {
@@ -1053,34 +1097,11 @@ export default function TitanSMS({ onLogout }) {
     setData((prev) => ({ ...prev, batches: prev.batches.filter((b) => b.id !== id) }));
   }
 
-  // ── Invoice handlers ──
-  async function handleMarkPaid(id, payment) {
-    const result = await api.markInvoicePaid(id, payment);
-    setData((prev) => {
-      // Remove the paid invoice; optionally append the newly generated next invoice
-      const invoices = prev.invoices.filter((i) => i.id !== result.deletedInvoiceId);
-      return {
-        ...prev,
-        invoices: result.nextInvoice ? [...invoices, result.nextInvoice] : invoices,
-        paymentHistory: [result.history, ...prev.paymentHistory],
-      };
-    });
-    // Handed back so the invoices page can receipt the payment it just recorded.
-    return result.history;
-  }
-
-  async function handleDeleteInvoice(id) {
-    await api.deleteInvoice(id);
-    setData((prev) => ({ ...prev, invoices: prev.invoices.filter((i) => i.id !== id) }));
-  }
-
-  async function handleGenerateInvoices() {
-    const result = await api.generateMonthlyInvoices();
-    // Generating also flips existing past-due invoices to Overdue, so pull the whole list
-    // back rather than appending — otherwise those rows would still read "Unpaid" here.
-    const invoices = await api.getInvoices();
-    setData((prev) => ({ ...prev, invoices }));
-    return result.count;
+  // ── Payments ──
+  // The invoices page does the recording and owns the months it is showing; this only keeps
+  // payment history in step.
+  async function handlePaymentRecorded(payment) {
+    setData((prev) => ({ ...prev, paymentHistory: [payment, ...prev.paymentHistory] }));
   }
 
   async function handleUpdatePaymentHistory(id, data) {
@@ -1096,9 +1117,6 @@ export default function TitanSMS({ onLogout }) {
     setData((prev) => ({
       ...prev,
       paymentHistory: prev.paymentHistory.filter((ph) => ph.id !== id),
-      invoices: result.deletedInvoiceId
-        ? prev.invoices.filter((i) => i.id !== result.deletedInvoiceId)
-        : prev.invoices,
     }));
   }
 
@@ -1136,13 +1154,12 @@ export default function TitanSMS({ onLogout }) {
     ),
     Invoices: (
       <InvoicesPage
-        invoices={data.invoices}
         students={data.students}
         batches={data.batches}
         settings={data.settings}
-        onMarkPaid={handleMarkPaid}
-        onDeleteInvoice={handleDeleteInvoice}
-        onGenerateInvoices={handleGenerateInvoices}
+        initialDues={data.dues}
+        initialTotals={data.duesTotals}
+        onPaymentRecorded={handlePaymentRecorded}
       />
     ),
     "Payment History": (

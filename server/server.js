@@ -39,8 +39,10 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/students", auth, require("./routes/students"));
 app.use("/api/batches", auth, require("./routes/batches"));
 
-// Billing records — what has been invoiced and collected: owner and admin.
-app.use("/api/invoices", auth, requireRole(...MANAGE_FINANCE), require("./routes/invoices"));
+// Billing records — what is owed and what has been collected: owner and admin. Dues are
+// derived from each student's billing schedule rather than stored, so there is no monthly
+// "generate" step and any month, past or future, can be asked for.
+app.use("/api/dues", auth, requireRole(...MANAGE_FINANCE), require("./routes/dues"));
 app.use("/api/payment-history", auth, requireRole(...MANAGE_FINANCE), require("./routes/paymentHistory"));
 // Settings: admin reads them (invoice previews use the prefix and currency); only the
 // owner changes them — enforced per-verb inside the router.

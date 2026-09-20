@@ -1,7 +1,7 @@
 // Shared payment-slip UI — one implementation used by every role's shell (TitanSMS.jsx and
 // OwnerSMS.jsx), the same arrangement as StudentsBatches.jsx.
 //
-// MarkPaidModal stands between "Mark Paid" and the API call. Settling an invoice needs two
+// MarkPaidModal stands between "Mark Paid" and the API call. Recording money needs two
 // things and refuses without either: the KBZPay screenshot for the transfer, and the paid
 // date typed in from that screenshot. Nothing is dated from the clock — the date field
 // starts empty on purpose, so it is entered deliberately every time.
@@ -264,14 +264,14 @@ export function SlipMissingNote({ value }) {
 }
 
 // ─── MARK PAID ───────────────────────────────────────────────────
-// `invoices`  — the invoices this one payment settles (one row, or a bulk selection).
-// `onConfirm` — receives { paidDate, slip } and does the marking; may reject with a message.
-export function MarkPaidModal({ invoices, onCancel, onConfirm }) {
+// `charges`   — the fees this one payment settles (one row, or a bulk selection).
+// `onConfirm` — receives { paidDate, slip } and does the recording; may reject with a message.
+export function MarkPaidModal({ charges, onCancel, onConfirm }) {
   const [payment, setPayment] = useState(emptySlipPayment);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const total = invoices.reduce((sum, i) => sum + i.amount, 0);
+  const total = charges.reduce((sum, c) => sum + c.amount, 0);
   const ready = isSlipComplete(payment) && !submitting;
 
   async function confirm() {
@@ -297,17 +297,21 @@ export function MarkPaidModal({ invoices, onCancel, onConfirm }) {
         </div>
 
         <div style={S.summary}>
-          {invoices.length === 1 ? (
+          {charges.length === 1 ? (
             <>
-              <div style={{ fontWeight: 700 }}>{invoices[0].studentName}</div>
+              <div style={{ fontWeight: 700 }}>{charges[0].studentName}</div>
               <div style={{ color: BRAND.grey }}>
-                {invoices[0].invoiceNumber} · {fmtMMK(invoices[0].amount)}
+                {charges[0].periodStart ? `Month from ${fmtSlipDate(charges[0].periodStart)}` : charges[0].invoiceNumber}
+                {" · "}
+                {fmtMMK(charges[0].amount)}
               </div>
             </>
           ) : (
             <>
-              <div style={{ fontWeight: 700 }}>{invoices.length} invoices · {fmtMMK(total)}</div>
-              <div style={{ color: BRAND.grey }}>{invoices.map((i) => i.invoiceNumber).join(", ")}</div>
+              <div style={{ fontWeight: 700 }}>{charges.length} fees · {fmtMMK(total)}</div>
+              <div style={{ color: BRAND.grey }}>
+                {[...new Set(charges.map((c) => c.studentName))].join(", ")}
+              </div>
             </>
           )}
         </div>

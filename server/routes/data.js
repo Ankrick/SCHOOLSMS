@@ -3,7 +3,6 @@ const router = express.Router();
 const Student = require("../models/Student");
 const Teacher = require("../models/Teacher");
 const Batch = require("../models/Batch");
-const Invoice = require("../models/Invoice");
 const Lead = require("../models/Lead");
 const Settings = require("../models/Settings");
 const PaymentHistory = require("../models/PaymentHistory");
@@ -21,7 +20,6 @@ router.delete("/reset", async (req, res, next) => {
       Student.deleteMany({}),
       Teacher.deleteMany({}),
       Batch.deleteMany({}),
-      Invoice.deleteMany({}),
       Lead.deleteMany({}),
       Settings.deleteMany({}),
       PaymentHistory.deleteMany({}),
@@ -36,7 +34,7 @@ router.delete("/reset", async (req, res, next) => {
         nextInvoiceNum: 1001,
       }),
     ]);
-    res.json({ students: [], teachers: [], batches, invoices: [], leads: [], settings, paymentHistory: [] });
+    res.json({ students: [], teachers: [], batches, leads: [], settings, paymentHistory: [] });
   } catch (err) {
     next(err);
   }
@@ -45,13 +43,14 @@ router.delete("/reset", async (req, res, next) => {
 // POST /api/data/import
 router.post("/import", async (req, res, next) => {
   try {
-    const { students = [], teachers = [], batches = [], invoices = [], leads = [], settings, paymentHistory = [] } = req.body;
+    // `invoices` in an older backup is ignored on purpose: what is owed is derived from the
+    // students and what has been collected, so there is nothing to restore.
+    const { students = [], teachers = [], batches = [], leads = [], settings, paymentHistory = [] } = req.body;
 
     await Promise.all([
       Student.deleteMany({}),
       Teacher.deleteMany({}),
       Batch.deleteMany({}),
-      Invoice.deleteMany({}),
       Lead.deleteMany({}),
       Settings.deleteMany({}),
       PaymentHistory.deleteMany({}),
@@ -73,11 +72,6 @@ router.post("/import", async (req, res, next) => {
     const studentIdMap = {};
     students.forEach((s, i) => { if (s.id && newStudents[i]) studentIdMap[s.id] = newStudents[i].id; });
 
-    const mappedInvoices = invoices.map((inv) => ({
-      ...strip(inv),
-      studentId: studentIdMap[inv.studentId] || inv.studentId || "",
-      batchId: batchIdMap[inv.batchId] || inv.batchId || "",
-    }));
     const mappedLeads = leads.map((l) => ({
       ...strip(l),
       convertedStudentId: l.convertedStudentId
@@ -90,8 +84,7 @@ router.post("/import", async (req, res, next) => {
       batchId: batchIdMap[ph.batchId] || ph.batchId || "",
     }));
 
-    const [newInvoices, newLeads, newSettings, newHistory] = await Promise.all([
-      mappedInvoices.length ? Invoice.insertMany(mappedInvoices) : [],
+    const [newLeads, newSettings, newHistory] = await Promise.all([
       mappedLeads.length ? Lead.insertMany(mappedLeads) : [],
       Settings.create(
         settings
@@ -105,7 +98,6 @@ router.post("/import", async (req, res, next) => {
       students: newStudents,
       teachers: newTeachers,
       batches: newBatches,
-      invoices: newInvoices,
       leads: newLeads,
       settings: newSettings,
       paymentHistory: newHistory,
