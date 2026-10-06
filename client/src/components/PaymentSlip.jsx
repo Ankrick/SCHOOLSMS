@@ -301,7 +301,11 @@ export function MarkPaidModal({ charges, onCancel, onConfirm }) {
             <>
               <div style={{ fontWeight: 700 }}>{charges[0].studentName}</div>
               <div style={{ color: BRAND.grey }}>
-                {charges[0].periodStart ? `Month from ${fmtSlipDate(charges[0].periodStart)}` : charges[0].invoiceNumber}
+                {charges[0].periodStart
+                  ? charges[0].periodEnd
+                    ? `Month from ${fmtSlipDate(charges[0].periodStart)}${charges[0].label ? ` · ${charges[0].label}` : ""}`
+                    : `${charges[0].label || "Payment"} · due ${fmtSlipDate(charges[0].periodStart)}`
+                  : charges[0].invoiceNumber}
                 {" · "}
                 {fmtMMK(charges[0].amount)}
               </div>

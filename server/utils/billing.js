@@ -12,6 +12,11 @@
 // at sign-up, so charging for it again would be asking twice — which makes index 1 the first
 // thing a student is ever invoiced for. A payment's `paymentCount` is its period index, which
 // is why it survives payments being made out of order.
+//
+// A student's paymentPlan shapes that schedule. "monthly" is the above, optionally capped at
+// a set number of months instead of running to the exam. "installments" replaces the
+// monthly cadence with a fixed list of payments on their own dates — index 0 is still the
+// one collected at registration, so the first installment is never invoiced either.
 
 const EXAM_SESSION_MONTHS = {
   jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
@@ -57,6 +62,61 @@ const feeFor = (student, batch, settings) => {
   return settings ? settings.defaultFee : 0;
 };
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_INSTALLMENTS = 24;
+const MAX_MONTHS = 60;
+
+// The plan a student is on. Students saved before plans existed have none, and are monthly
+// and open-ended — exactly how they have always been billed.
+function planOf(student) {
+  const plan = student.paymentPlan || {};
+  if (plan.kind === "installments" && plan.installments && plan.installments.length) {
+    return { kind: "installments", installments: plan.installments };
+  }
+  return { kind: "monthly", months: plan.months || null };
+}
+
+// Check a plan sent from the form and put it in the shape that is stored. The first
+// installment is pinned to the billing anchor — it is the payment taken at registration —
+// so a changed billing date can never leave it pointing somewhere else.
+function normalizePlan(plan, anchor) {
+  if (!plan || typeof plan !== "object") return { plan: { kind: "monthly", months: null, installments: [] } };
+
+  if (plan.kind === "installments") {
+    const list = Array.isArray(plan.installments) ? plan.installments : [];
+    if (list.length < 1 || list.length > MAX_INSTALLMENTS) {
+      return { error: `An installment plan needs between 1 and ${MAX_INSTALLMENTS} payments.` };
+    }
+    if (!anchor || !DATE.test(anchor)) return { error: "Set a billing date before choosing an installment plan." };
+
+    const installments = [];
+    for (let i = 0; i < list.length; i++) {
+      const amount = Number(list[i] && list[i].amount);
+      const dueDate = i === 0 ? anchor : list[i] && list[i].dueDate;
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return { error: `Enter an amount for payment ${i + 1}.` };
+      }
+      if (typeof dueDate !== "string" || !DATE.test(dueDate)) {
+        return { error: `Enter a due date for payment ${i + 1}.` };
+      }
+      if (i > 0 && dueDate <= installments[i - 1].dueDate) {
+        return { error: `Payment ${i + 1} must fall after payment ${i}.` };
+      }
+      installments.push({ amount: Math.round(amount), dueDate });
+    }
+    return { plan: { kind: "installments", months: null, installments } };
+  }
+
+  if (plan.months == null || plan.months === "") {
+    return { plan: { kind: "monthly", months: null, installments: [] } };
+  }
+  const months = Number(plan.months);
+  if (!Number.isInteger(months) || months < 1 || months > MAX_MONTHS) {
+    return { error: `The number of months must be a whole number from 1 to ${MAX_MONTHS}.` };
+  }
+  return { plan: { kind: "monthly", months, installments: [] } };
+}
+
 // Which period lands in `mk`. Each period starts on the anchor's day-of-month, so exactly
 // one begins in every calendar month and the index is plain month arithmetic.
 function periodIndexInMonth(anchor, mk) {
@@ -85,11 +145,67 @@ function fmtShortDate(dateStr) {
   });
 }
 
+// What the plan charges at period `index`, or null when the plan has no such payment.
+// Exam cutoffs are not applied here — they bound which months are billed, not what a
+// period is — so a payment recorded before a batch's exam moved still resolves.
+function chargeAt(student, batch, settings, index) {
+  const anchor = billingAnchor(student);
+  if (!anchor || index < 0) return null;
+  const plan = planOf(student);
+
+  if (plan.kind === "installments") {
+    const inst = plan.installments[index];
+    if (!inst) return null;
+    const n = plan.installments.length;
+    return {
+      periodStart: index === 0 ? anchor : inst.dueDate,
+      periodEnd: "",
+      amount: inst.amount,
+      label: n === 1 ? "Full payment" : `Installment ${index + 1} of ${n}`,
+    };
+  }
+
+  if (plan.months && index >= plan.months) return null;
+  return {
+    periodStart: addMonths(anchor, index),
+    periodEnd: addMonths(anchor, index + 1),
+    amount: feeFor(student, batch, settings),
+    label: plan.months ? `Month ${index + 1} of ${plan.months}` : "",
+  };
+}
+
+// The period indexes a student is billed for in calendar month `mk`, before the
+// registration period is excluded. Monthly plans have at most one; installments can have
+// several if two fall in the same month.
+function periodIndexesInMonth(student, batch, mk) {
+  const anchor = billingAnchor(student);
+  if (!anchor) return [];
+  const plan = planOf(student);
+
+  if (plan.kind === "installments") {
+    const out = [];
+    plan.installments.forEach((inst, i) => {
+      const start = i === 0 ? anchor : inst.dueDate;
+      if (start.slice(0, 7) === mk) out.push(i);
+    });
+    return out;
+  }
+
+  const index = periodIndexInMonth(anchor, mk);
+  if (index < 0) return [];
+  if (plan.months) return index < plan.months ? [index] : [];
+  // Open-ended monthly billing runs until the batch's exam.
+  const cutoff = examCutoffMonth(batch);
+  return cutoff && mk > cutoff ? [] : [index];
+}
+
 // The charge a student carries for one period. `id` is synthetic and stable — a due has no
 // document of its own, so the student and the period it covers are its identity.
 function makeDue({ student, batch, settings, index }) {
-  const anchor = billingAnchor(student);
-  const periodStart = addMonths(anchor, index);
+  const charge = chargeAt(student, batch, settings, index);
+  if (!charge) return null;
+  const { periodStart, periodEnd, amount, label } = charge;
+  const what = label || fmtShortDate(periodStart) + " – " + fmtShortDate(periodEnd);
   return {
     id: `${student.id}:${periodStart}`,
     studentId: student.id,
@@ -100,33 +216,35 @@ function makeDue({ student, batch, settings, index }) {
     batchName: batch ? batch.name : "—",
     periodIndex: index,
     periodStart,
-    periodEnd: addMonths(anchor, index + 1),
+    periodEnd,
+    label,
     monthKey: periodStart.slice(0, 7),
     // Students prepay, so the money is due on the day the period opens.
     dueDate: periodStart,
-    amount: feeFor(student, batch, settings),
+    amount,
     status: "Unpaid",
     paidDate: null,
     paymentId: null,
     invoiceNumber: "",
     kind: index === 0 ? "registration" : "invoice",
     // One line, so the printable bill a parent is sent renders the same as it always did.
-    items: [
-      {
-        desc: (batch ? batch.name : "Tuition") + " · " + fmtShortDate(periodStart) + " – " + fmtShortDate(addMonths(anchor, index + 1)),
-        qty: 1,
-        rate: feeFor(student, batch, settings),
-      },
-    ],
+    items: [{ desc: (batch ? batch.name : "Tuition") + " · " + what, qty: 1, rate: amount }],
   };
 }
 
-// Is this a real period boundary for the student, rather than an arbitrary date?
+// Is this a real period start for the student, rather than an arbitrary date?
 function periodIndexOf(student, periodStart) {
   const anchor = billingAnchor(student);
   if (!anchor) return -1;
+  const plan = planOf(student);
+
+  if (plan.kind === "installments") {
+    if (periodStart === anchor) return 0;
+    return plan.installments.findIndex((inst, i) => i > 0 && inst.dueDate === periodStart);
+  }
+
   const index = periodIndexInMonth(anchor, periodStart.slice(0, 7));
-  if (index < 0) return -1;
+  if (index < 0 || (plan.months && index >= plan.months)) return -1;
   return addMonths(anchor, index) === periodStart ? index : -1;
 }
 
@@ -137,7 +255,10 @@ module.exports = {
   examCutoffMonth,
   billingAnchor,
   feeFor,
-  periodIndexInMonth,
+  planOf,
+  normalizePlan,
+  chargeAt,
+  periodIndexesInMonth,
   periodIndexOf,
   monthRange,
   makeDue,

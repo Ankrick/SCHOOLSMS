@@ -31,6 +31,10 @@ const paymentHistorySchema = new mongoose.Schema(
     // first billing period and is numbered 0, leaving invoice payments to run 1, 2, 3…
     kind: { type: String, enum: ["invoice", "registration"], default: "invoice" },
     paymentCount: { type: Number, default: 1 },
+    // Where the payment sits in the student's plan — "Month 3 of 6", "Installment 2 of 3" —
+    // so receipts can say so. Empty for open-ended monthly billing, and for installments
+    // periodEnd is empty too: an installment is due on a date, it does not cover a month.
+    label: { type: String, default: "" },
     notes: { type: String, default: "" },
     slip: { type: slipSchema, default: () => ({}) },
   },

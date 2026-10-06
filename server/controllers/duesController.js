@@ -7,10 +7,9 @@ const {
   today,
   currentMonthKey,
   addMonths,
-  examCutoffMonth,
   billingAnchor,
-  feeFor,
-  periodIndexInMonth,
+  chargeAt,
+  periodIndexesInMonth,
   periodIndexOf,
   monthRange,
   makeDue,
@@ -46,23 +45,21 @@ exports.getDues = async (req, res, next) => {
     const studentById = Object.fromEntries(students.map((s) => [s.id, s]));
     const todayStr = today();
 
-    // The schedule: one due per active student per month they are being taught.
+    // The schedule: every payment each active student's plan falls due in these months.
     const byKey = new Map();
     for (const student of students) {
       if (student.status !== "Active") continue;
-      const anchor = billingAnchor(student);
-      if (!anchor) continue;
+      if (!billingAnchor(student)) continue;
       const batch = batchById[student.batchId];
-      const cutoff = examCutoffMonth(batch);
 
       for (const mk of months) {
-        if (cutoff && mk > cutoff) continue;
-        const index = periodIndexInMonth(anchor, mk);
-        // index 0 is the month paid for at registration — the slip was taken then, so
-        // billing it again would be asking twice. Charging starts at the second month.
-        if (index < 1) continue;
-        const due = makeDue({ student, batch, settings, index });
-        byKey.set(due.id, due);
+        for (const index of periodIndexesInMonth(student, batch, mk)) {
+          // index 0 is the payment taken at registration — the slip was collected then, so
+          // billing it again would be asking twice. Charging starts at the second payment.
+          if (index < 1) continue;
+          const due = makeDue({ student, batch, settings, index });
+          if (due) byKey.set(due.id, due);
+        }
       }
     }
 
@@ -85,7 +82,10 @@ exports.getDues = async (req, res, next) => {
         }),
         id: key,
         periodStart: ph.periodStart,
-        periodEnd: ph.periodEnd || addMonths(ph.periodStart, 1),
+        // Installment payments carry a label and deliberately no end; older monthly rows
+        // that predate stored ends are a month long.
+        periodEnd: ph.periodEnd || (ph.label ? "" : addMonths(ph.periodStart, 1)),
+        label: ph.label || "",
         monthKey: ph.periodStart.slice(0, 7),
         dueDate: ph.periodStart,
         periodIndex: ph.paymentCount,
@@ -158,7 +158,7 @@ exports.payDue = async (req, res, next) => {
     }
     if (index === 0) {
       return res.status(400).json({
-        message: `${student.name}'s first month was collected when they were registered, so it is not billed again.`,
+        message: `${student.name}'s first payment was collected when they were registered, so it is not billed again.`,
       });
     }
 
@@ -182,6 +182,9 @@ exports.payDue = async (req, res, next) => {
       await settings.save();
     }
 
+    // The plan says what this period costs — the client's figure is never trusted.
+    const charge = chargeAt(student, batch, settings, index);
+
     const payment = await PaymentHistory.create({
       studentId: student.id,
       studentName: student.name,
@@ -190,12 +193,13 @@ exports.payDue = async (req, res, next) => {
       batchId: student.batchId || "",
       batchName: batch ? batch.name : "—",
       invoiceNumber: reference,
-      amount: feeFor(student, batch, settings),
+      amount: charge.amount,
       paidDate,
       periodStart,
-      periodEnd: addMonths(periodStart, 1),
+      periodEnd: charge.periodEnd,
+      label: charge.label,
       // The period's own index, so payments stay correctly numbered however out of order
-      // they are recorded. Index 0 never reaches here, so this is always a monthly fee.
+      // they are recorded. Index 0 never reaches here, so this is never the registration.
       kind: "invoice",
       paymentCount: index,
       notes: "",

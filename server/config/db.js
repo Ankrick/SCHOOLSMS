@@ -1,4 +1,9 @@
+const dns = require("dns");
 const mongoose = require("mongoose");
+
+// Some local resolvers (e.g. iPhone hotspots) return malformed SRV responses to
+// Node, breaking mongodb+srv:// lookups. Use public DNS for Node's resolver.
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
 const DEFAULT_BATCHES = [
   { name: "CIE 0478 — Sat/Mon", syllabus: "CIE", days: "Sat & Mon", maxStudents: 15, fee: 180000 },

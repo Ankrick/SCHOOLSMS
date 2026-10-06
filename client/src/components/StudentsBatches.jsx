@@ -12,6 +12,7 @@
 
 import { useState, useMemo, Fragment } from "react";
 import { SlipFields, SlipMissingNote, emptySlipPayment, isSlipComplete } from "./PaymentSlip";
+import { planSummary } from "../paymentPlan";
 
 const BRAND = {
   crimson: "#8B1A1A",
@@ -105,6 +106,18 @@ const fmtDate = (d) =>
   d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const fmtDateInput = (d) => (d ? new Date(d).toISOString().split("T")[0] : "");
 const today = () => new Date().toISOString().split("T")[0];
+// Add `n` calendar months, clamping to the month's last day — the same arithmetic the server
+// bills with, so suggested installment dates land where monthly billing would.
+const addMonths = (dateStr, n) => {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const total = year * 12 + (month - 1) + n;
+  const newYear = Math.floor(total / 12);
+  const newMonth = (total % 12) + 1;
+  const lastDay = new Date(newYear, newMonth, 0).getDate();
+  return `${newYear}-${String(newMonth).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+};
+const MAX_INSTALLMENTS = 24;
+const EMPTY_PLAN = { kind: "monthly", months: null, installments: [] };
 
 // ─── PRIMITIVES ──────────────────────────────────────────────────
 function Modal({ title, onClose, children, contentStyle }) {
@@ -160,7 +173,6 @@ function EmptyState({ icon, message, action }) {
 
 // ─── STUDENT DETAIL CARD (inside the batch window) ───────────────
 function StudentDetailCard({ student, batch, onEdit, onDelete, onAddStrike, onRemoveStrike }) {
-  const fee = student.customFee != null ? student.customFee : batch ? batch.fee : null;
   // Exactly these four, always shown in this order — a missing one reads "—" rather than
   // vanishing, so every card lines up and a gap is obvious. Everything else lives in Edit.
   const billing = student.billingStartDate || student.enrolledDate;
@@ -168,7 +180,7 @@ function StudentDetailCard({ student, batch, onEdit, onDelete, onAddStrike, onRe
     ["Student Telegram", student.telegram],
     ["Guardian fb contact", student.invoiceContact],
     ["Billing Date", billing ? fmtDate(billing) : null],
-    ["Class Fee", fee != null ? fmtMMK(fee) : null],
+    ["Payment Plan", planSummary(student, batch)],
   ];
 
   return (
@@ -209,6 +221,169 @@ function StudentDetailCard({ student, batch, onEdit, onDelete, onAddStrike, onRe
   );
 }
 
+// ─── PAYMENT PLAN ────────────────────────────────────────────────
+// Monthly: a fee per month and, optionally, how many months (blank runs to the batch's
+// exam). Installments: a number of payments, each with its own amount and due date. The
+// first payment of either is the one collected at registration, so the first installment's
+// date is the billing date and is not editable here.
+function PaymentPlanFields({ plan, anchor, customFee, batchFee, onPlanChange, onFeeChange, disabled }) {
+  const installments = plan.installments || [];
+
+  function setKind(kind) {
+    if (kind === plan.kind) return;
+    // Switching to installments for the first time suggests three monthly payments.
+    const next = { ...plan, kind };
+    if (kind === "installments" && installments.length === 0) next.installments = resize([], 3);
+    onPlanChange(next);
+  }
+
+  // New rows default to a month after the one before, which is where monthly billing would
+  // have put them; existing rows keep what was typed.
+  function resize(list, count) {
+    const out = list.slice(0, count);
+    while (out.length < count) {
+      const prev = out.length ? out[out.length - 1].dueDate || anchor : anchor;
+      out.push({ amount: "", dueDate: out.length === 0 ? anchor : addMonths(prev, 1) });
+    }
+    return out;
+  }
+
+  function setCount(raw) {
+    const count = Math.max(1, Math.min(MAX_INSTALLMENTS, parseInt(raw) || 1));
+    onPlanChange({ ...plan, installments: resize(installments, count) });
+  }
+
+  function setInstallment(i, key, value) {
+    onPlanChange({ ...plan, installments: installments.map((inst, j) => (j === i ? { ...inst, [key]: value } : inst)) });
+  }
+
+  const total = installments.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+  const segment = (active) => ({
+    ...S.btn(active ? "primary" : "secondary"),
+    flex: 1,
+    justifyContent: "center",
+  });
+
+  return (
+    <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 20, marginBottom: 16 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Payment plan</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button type="button" style={segment(plan.kind !== "installments")} onClick={() => setKind("monthly")} disabled={disabled}>
+          Monthly
+        </button>
+        <button type="button" style={segment(plan.kind === "installments")} onClick={() => setKind("installments")} disabled={disabled}>
+          Installments
+        </button>
+      </div>
+
+      {plan.kind !== "installments" ? (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="preview-grid">
+            <div style={S.formGroup}>
+              <label style={S.formLabel}>Fee per month (MMK)</label>
+              <input
+                style={S.input}
+                type="number"
+                min="0"
+                value={customFee ?? ""}
+                onChange={(e) => onFeeChange(e.target.value === "" ? null : parseInt(e.target.value))}
+                placeholder={`Batch default: ${fmtMMK(batchFee)}`}
+                disabled={disabled}
+              />
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.formLabel}>Number of months</label>
+              <input
+                style={S.input}
+                type="number"
+                min="1"
+                value={plan.months ?? ""}
+                onChange={(e) => onPlanChange({ ...plan, months: e.target.value === "" ? null : parseInt(e.target.value) })}
+                placeholder="Until the batch's exam"
+                disabled={disabled}
+              />
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: BRAND.grey }}>
+            Billed on the billing date each month. Leave the number of months blank to keep billing until the batch's exam.
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ ...S.formGroup, maxWidth: 200 }}>
+            <label style={S.formLabel}>Number of payments</label>
+            <input
+              style={S.input}
+              type="number"
+              min="1"
+              max={MAX_INSTALLMENTS}
+              value={installments.length}
+              onChange={(e) => setCount(e.target.value)}
+              disabled={disabled}
+            />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", gap: "8px 12px", alignItems: "center" }}>
+            <div style={S.formLabel}>#</div>
+            <div style={S.formLabel}>Amount (MMK)</div>
+            <div style={S.formLabel}>Due date</div>
+            {installments.map((inst, i) => (
+              <Fragment key={i}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{i + 1}</div>
+                <input
+                  style={S.input}
+                  type="number"
+                  min="1"
+                  value={inst.amount}
+                  onChange={(e) => setInstallment(i, "amount", e.target.value === "" ? "" : parseInt(e.target.value))}
+                  disabled={disabled}
+                />
+                {i === 0 ? (
+                  <div style={{ fontSize: 12, color: BRAND.grey, lineHeight: 1.3 }}>
+                    {anchor ? fmtDate(anchor) : "Billing date"}
+                    <div>Paid at registration</div>
+                  </div>
+                ) : (
+                  <input
+                    style={S.input}
+                    type="date"
+                    value={inst.dueDate || ""}
+                    onChange={(e) => setInstallment(i, "dueDate", e.target.value)}
+                    disabled={disabled}
+                  />
+                )}
+              </Fragment>
+            ))}
+          </div>
+          <div style={{ ...S.flexBetween, marginTop: 12, fontSize: 13 }}>
+            <span style={{ color: BRAND.grey }}>Each payment is invoiced on its due date.</span>
+            <span>Total: <strong>{fmtMMK(total)}</strong></span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Same rules the server applies, checked first so a mistake is caught before the slip upload.
+function planError(plan, anchor) {
+  if (plan.kind === "installments") {
+    const list = plan.installments || [];
+    if (list.length === 0) return "Add at least one payment to the installment plan.";
+    for (let i = 0; i < list.length; i++) {
+      if (!(Number(list[i].amount) > 0)) return `Enter an amount for payment ${i + 1}.`;
+      const due = i === 0 ? anchor : list[i].dueDate;
+      if (!due) return `Enter a due date for payment ${i + 1}.`;
+      const prev = i === 0 ? null : i === 1 ? anchor : list[i - 1].dueDate;
+      if (prev && due <= prev) return `Payment ${i + 1} must fall after payment ${i}.`;
+    }
+    return null;
+  }
+  if (plan.months != null && !(Number.isInteger(plan.months) && plan.months >= 1)) {
+    return "The number of months must be a whole number of at least 1.";
+  }
+  return null;
+}
+
 // ─── FORMS ───────────────────────────────────────────────────────
 // Registering a student is also their first payment: the form asks for the KBZPay slip and
 // the date off it, the server records that fee against the student, and the receipt for it
@@ -225,6 +400,7 @@ function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receipt
       batchId: lockedBatchId !== undefined ? lockedBatchId : batches[0]?.id || "",
       subject: "Computer Science", status: "Active", strikes: 0,
       customFee: null, enrolledDate: today(), billingStartDate: today(),
+      paymentPlan: EMPTY_PLAN,
       invoiceContact: "", parentPhone: "", notes: "",
     }
   );
@@ -235,24 +411,39 @@ function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receipt
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
   const batchFee = batches.find((b) => b.id === form.batchId)?.fee ?? 0;
+  const plan = form.paymentPlan || EMPTY_PLAN;
+  const anchor = fmtDateInput(form.billingStartDate || form.enrolledDate);
+  const isInstallments = plan.kind === "installments";
+  // What registration collects: the first month, or the first installment.
+  const firstAmount = isInstallments
+    ? Number(plan.installments?.[0]?.amount) || 0
+    : form.customFee != null ? form.customFee : batchFee;
 
   async function handleSave() {
     if (!form.name.trim()) return alert("Name is required");
+    const badPlan = planError(plan, anchor);
+    if (badPlan) return alert(badPlan);
     if (isNew && !isSlipComplete(firstPayment)) {
       return alert("Enter the paid date and attach the KBZPay slip for the first payment.");
     }
     setSaving(true);
     try {
+      // Only the chosen kind's details are sent; the first installment always sits on the
+      // billing date.
+      const paymentPlan = isInstallments
+        ? { kind: "installments", months: null, installments: plan.installments.map((inst, i) => ({ amount: Number(inst.amount), dueDate: i === 0 ? anchor : inst.dueDate })) }
+        : { kind: "monthly", months: plan.months ?? null, installments: [] };
+      const payload = { ...form, paymentPlan };
       const saved = await onSave(
         isNew
           ? {
-              ...form,
+              ...payload,
               firstPayment: {
                 paidDate: firstPayment.paidDate,
                 slip: { image: firstPayment.image, filename: firstPayment.filename },
               },
             }
-          : form
+          : payload
       );
       // The receipt is drawn from the payment the server actually recorded, so what the
       // student is handed matches the books exactly — amount, period and reference.
@@ -314,16 +505,6 @@ function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receipt
             <option value="Expelled">Expelled</option>
           </select>
         </div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Class Fee (MMK)</label>
-          <input
-            style={S.input}
-            type="number"
-            value={form.customFee ?? ""}
-            onChange={(e) => set("customFee", e.target.value === "" ? null : parseInt(e.target.value))}
-            placeholder={`Batch default: ${fmtMMK(batchFee)}`}
-          />
-        </div>
         <div style={S.formGroup}><label style={S.formLabel}>Enrolled Date</label><input style={S.input} type="date" value={fmtDateInput(form.enrolledDate)} onChange={(e) => set("enrolledDate", e.target.value)} /></div>
         <div style={S.formGroup}><label style={S.formLabel}>Billing Period</label><input style={S.input} type="date" value={fmtDateInput(form.billingStartDate || form.enrolledDate)} onChange={(e) => set("billingStartDate", e.target.value)} /></div>
         <div style={S.formGroup}>
@@ -339,11 +520,28 @@ function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receipt
       </div>
       <div style={S.formGroup}><label style={S.formLabel}>Notes</label><textarea style={{ ...S.input, height: 60, resize: "vertical" }} value={form.notes || ""} onChange={(e) => set("notes", e.target.value)} /></div>
 
+      <PaymentPlanFields
+        plan={plan}
+        anchor={anchor}
+        customFee={form.customFee}
+        batchFee={batchFee}
+        onPlanChange={(next) => set("paymentPlan", next)}
+        onFeeChange={(fee) => set("customFee", fee)}
+        disabled={saving}
+      />
+      {!isNew && (
+        <div style={{ fontSize: 12, color: BRAND.grey, marginTop: -8, marginBottom: 16 }}>
+          Changing the plan changes what is invoiced from now on. Payments already recorded stay as they were.
+        </div>
+      )}
+
       {isNew && (
         <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 20, marginTop: 4 }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>First payment</div>
           <div style={{ fontSize: 12, color: BRAND.grey, marginBottom: 16 }}>
-            {fmtMMK(form.customFee != null ? form.customFee : batchFee)} for the first billing month. Recorded against the student and receipted on save.
+            {fmtMMK(firstAmount)} {isInstallments
+              ? plan.installments.length === 1 ? "— the full payment" : `— installment 1 of ${plan.installments.length}`
+              : "for the first billing month"}. Recorded against the student and receipted on save.
           </div>
           <SlipFields
             value={firstPayment}

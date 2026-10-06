@@ -3,17 +3,7 @@ const Batch = require("../models/Batch");
 const Settings = require("../models/Settings");
 const PaymentHistory = require("../models/PaymentHistory");
 const { readSlipPayload, withoutSlipImage } = require("../utils/slip");
-
-// Add `n` calendar months to a date, clamping to the last valid day if needed — mirrors
-// invoiceController so a registration period lines up with the invoices that follow it.
-function addMonths(dateStr, n) {
-  const [year, month, day] = dateStr.split("-").map(Number);
-  const total = year * 12 + (month - 1) + n;
-  const newYear = Math.floor(total / 12);
-  const newMonth = (total % 12) + 1;
-  const lastDay = new Date(newYear, newMonth, 0).getDate();
-  return `${newYear}-${String(newMonth).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
-}
+const { billingAnchor, normalizePlan, chargeAt } = require("../utils/billing");
 
 exports.getStudents = async (req, res, next) => {
   try {
@@ -26,15 +16,19 @@ exports.getStudents = async (req, res, next) => {
 
 // Registering a student is also the first payment, so it needs the same evidence as any
 // other: the KBZPay slip for the transfer and the date read off it. The fee lands in
-// payment history as a "registration" payment covering the first billing period, which is
-// what lets the first generated invoice start from the second — the cadence invoicing has
-// always assumed, but until now had no record of.
+// payment history as a "registration" payment covering the plan's first payment — the first
+// month, or the first installment — which is what lets invoicing start from the second.
 exports.createStudent = async (req, res, next) => {
   try {
     const { firstPayment, ...studentData } = req.body || {};
 
     const { error, paidDate, slip } = readSlipPayload(firstPayment, "a student can be registered");
     if (error) return res.status(400).json({ message: error });
+
+    if (!studentData.billingStartDate && !studentData.enrolledDate) studentData.billingStartDate = paidDate;
+    const planCheck = normalizePlan(studentData.paymentPlan, billingAnchor(studentData));
+    if (planCheck.error) return res.status(400).json({ message: planCheck.error });
+    studentData.paymentPlan = planCheck.plan;
 
     const student = await Student.create(studentData);
 
@@ -43,16 +37,7 @@ exports.createStudent = async (req, res, next) => {
       student.batchId ? Batch.findById(student.batchId).catch(() => null) : null,
     ]);
 
-    const fee =
-      student.customFee != null
-        ? student.customFee
-        : batch
-        ? batch.fee
-        : settings
-        ? settings.defaultFee
-        : 0;
-
-    const periodStart = student.billingStartDate || student.enrolledDate || paidDate;
+    const charge = chargeAt(student, batch, settings, 0);
 
     // The receipt wants a reference, and taking the next invoice number keeps every document
     // the centre hands out unique — there is simply no Invoice behind this one.
@@ -71,14 +56,15 @@ exports.createStudent = async (req, res, next) => {
       batchId: student.batchId || "",
       batchName: batch ? batch.name : "—",
       invoiceNumber: reference,
-      amount: fee,
+      amount: charge.amount,
       paidDate,
-      periodStart,
-      periodEnd: addMonths(periodStart, 1),
+      periodStart: charge.periodStart,
+      periodEnd: charge.periodEnd,
+      label: charge.label,
       kind: "registration",
       // Numbered 0 so it sits before the invoice payments without renumbering them.
       paymentCount: 0,
-      notes: "Registration — first month",
+      notes: charge.label ? `Registration — ${charge.label.toLowerCase()}` : "Registration — first month",
       slip,
     });
 
@@ -90,7 +76,22 @@ exports.createStudent = async (req, res, next) => {
 
 exports.updateStudent = async (req, res, next) => {
   try {
-    const student = await Student.findByIdAndUpdate(req.params.id, req.body, {
+    const update = { ...req.body };
+    // The plan is checked against the billing date it will have after this save, so the
+    // first installment follows a moved billing date.
+    if (update.paymentPlan !== undefined) {
+      const existing = await Student.findById(req.params.id).catch(() => null);
+      if (!existing) return res.status(404).json({ message: "Student not found" });
+      const anchor = billingAnchor({
+        billingStartDate: update.billingStartDate !== undefined ? update.billingStartDate : existing.billingStartDate,
+        enrolledDate: update.enrolledDate !== undefined ? update.enrolledDate : existing.enrolledDate,
+      });
+      const planCheck = normalizePlan(update.paymentPlan, anchor);
+      if (planCheck.error) return res.status(400).json({ message: planCheck.error });
+      update.paymentPlan = planCheck.plan;
+    }
+
+    const student = await Student.findByIdAndUpdate(req.params.id, update, {
       new: true,
       runValidators: true,
     });

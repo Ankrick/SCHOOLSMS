@@ -3,6 +3,7 @@ import html2canvas from "html2canvas";
 import * as api from "../api";
 import { StudentsPage } from "./StudentsBatches";
 import { MarkPaidModal, SlipViewer } from "./PaymentSlip";
+import { monthlyFeeOf } from "../paymentPlan";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────
 const BRAND = {
@@ -98,6 +99,23 @@ const fmtPeriod = (start, end) => {
   const endYear = new Date(end + "T12:00:00").getFullYear();
   return `${fmt(start)} – ${fmt(end)} ${endYear}`;
 };
+// What a charge or payment is for. Monthly billing covers a span ("06 Oct – 06 Nov 2026"),
+// tagged with its place in a fixed-length plan ("Month 3 of 6"); an installment is due on a
+// date rather than covering one, so it is described by its place alone.
+const chargeText = (x) => {
+  if (x.periodStart && x.periodEnd) return fmtPeriod(x.periodStart, x.periodEnd) + (x.label ? ` (${x.label})` : "");
+  return x.label || "—";
+};
+// The same, for table cells: the span on top and the plan position underneath.
+function ChargePeriod({ charge }) {
+  if (!charge.periodEnd) return <>{charge.label || "—"}</>;
+  return (
+    <>
+      {fmtPeriod(charge.periodStart, charge.periodEnd)}
+      {charge.label && <div style={{ fontSize: 11, color: BRAND.grey }}>{charge.label}</div>}
+    </>
+  );
+}
 const isExamSoon = (examDate) => {
   if (!examDate) return false;
   const examMk = examDate.slice(0, 7);
@@ -217,7 +235,7 @@ const FEE_STATUS_STYLE = {
 
 function FeeMonthChip({ period }) {
   const st = FEE_STATUS_STYLE[period.status];
-  const tooltip = `${fmtPeriod(period.periodStart, period.periodEnd)} — ${st.label}${period.paidDate ? ` on ${fmtDate(period.paidDate)}` : ""}`;
+  const tooltip = `${chargeText(period)}${period.amount != null ? ` · ${fmtMMK(period.amount)}` : ""} — ${st.label}${period.paidDate ? ` on ${fmtDate(period.paidDate)}` : ""}`;
   return (
     <span
       title={tooltip}
@@ -266,7 +284,7 @@ function Dashboard({ data }) {
     .filter((s) => s.status === "Active")
     .reduce((sum, s) => {
       const batch = batches.find((b) => b.id === s.batchId);
-      return sum + (s.customFee != null ? s.customFee : (batch ? batch.fee : 0));
+      return sum + monthlyFeeOf(s, batch);
     }, 0);
   const teacherSalaryCost = activeTeachers.reduce((sum, t) => sum + (t.monthlySalary || 0), 0);
   const commissionCost = Math.round(
@@ -274,7 +292,7 @@ function Dashboard({ data }) {
       if (!b.commissionPercent) return sum;
       const batchRevenue = students
         .filter((s) => s.status === "Active" && s.batchId === b.id)
-        .reduce((rev, s) => rev + (s.customFee != null ? s.customFee : b.fee), 0);
+        .reduce((rev, s) => rev + monthlyFeeOf(s, b), 0);
       const teacher = teachers.find((t) => t.id === b.teacherId);
       const profitAfterSalary = batchRevenue - (teacher ? teacher.monthlySalary || 0 : 0);
       return sum + Math.max(0, profitAfterSalary) * (b.commissionPercent / 100);
@@ -907,7 +925,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
                     </td>
                     <td style={S.td} data-label="Batch"><span style={S.tag}>{due.batchName}</span></td>
                     <td style={{ ...S.td, whiteSpace: "nowrap", fontSize: 12 }} data-label="Period">
-                      {fmtPeriod(due.periodStart, due.periodEnd)}
+                      <ChargePeriod charge={due} />
                     </td>
                     <td style={S.td} data-label="Amount">{fmtMMK(due.amount)}</td>
                     <td style={S.td} data-label="Status">
@@ -1026,13 +1044,10 @@ function InvoicePreview({ invoice, settings }) {
             <div style={{ color: BRAND.grey }}>{invoice.studentEmail}</div>
           </div>
           <div style={{ textAlign: "right" }}>
-            {(invoice.periodStart || invoice.dueDate) && (
+            {invoice.periodStart && (
               <div style={{ marginBottom: 4 }}>
-                <span style={{ color: BRAND.grey }}>Billing Period:</span>{" "}
-                <strong>{fmtPeriod(
-                  invoice.periodStart || invoice.dueDate,
-                  invoice.periodEnd || addOneMonth(invoice.periodStart || invoice.dueDate)
-                )}</strong>
+                <span style={{ color: BRAND.grey }}>{invoice.periodEnd ? "Billing Period:" : "Payment:"}</span>{" "}
+                <strong>{chargeText(invoice)}</strong>
               </div>
             )}
             <div><span style={{ color: BRAND.grey }}>Due Date:</span> {fmtDate(invoice.dueDate)}</div>
@@ -1091,9 +1106,11 @@ function ReceiptPreview({ payment: ph }) {
   const receiptRef = useRef(null);
   const [saving, setSaving] = useState(false);
 
-  // Use the invoice's due date (periodStart) as billing start — not the actual payment date
+  // Use the invoice's due date (periodStart) as billing start — not the actual payment date.
+  // Installments carry a label and no end on purpose; only older monthly rows lack one.
   const billingStart = ph.periodStart || ph.paidDate;
-  const billingEnd = ph.periodEnd || addOneMonth(billingStart);
+  const billingEnd = ph.periodEnd || (ph.label ? "" : addOneMonth(billingStart));
+  const charge = { periodStart: billingStart, periodEnd: billingEnd, label: ph.label };
 
   async function saveAsImage() {
     if (!receiptRef.current) return;
@@ -1142,8 +1159,8 @@ function ReceiptPreview({ payment: ph }) {
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ marginBottom: 4 }}>
-                <span style={{ color: BRAND.grey }}>Billing Period:</span>{" "}
-                <strong>{fmtPeriod(billingStart, billingEnd)}</strong>
+                <span style={{ color: BRAND.grey }}>{billingEnd ? "Billing Period:" : "Payment:"}</span>{" "}
+                <strong>{chargeText(charge)}</strong>
               </div>
               <div><span style={{ color: BRAND.grey }}>Paid Date:</span> {fmtDate(ph.paidDate)}</div>
               <div style={{ marginTop: 6 }}>
@@ -1165,7 +1182,7 @@ function ReceiptPreview({ payment: ph }) {
           </thead>
           <tbody>
             <tr>
-              <td style={S.td}>{ph.batchName} · {fmtPeriod(billingStart, billingEnd)}</td>
+              <td style={S.td}>{ph.batchName} · {chargeText(charge)}</td>
               <td style={{ ...S.td, textAlign: "center" }}>1</td>
               <td style={{ ...S.td, textAlign: "right" }}>{fmtMMK(ph.amount)}</td>
               <td style={{ ...S.td, textAlign: "right", fontWeight: 600 }}>{fmtMMK(ph.amount)}</td>
@@ -1307,7 +1324,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
                     <td style={S.td}><span style={S.tag}>{ph.batchName}</span></td>
                     <td style={{ ...S.td, fontFamily: "monospace", fontSize: 12 }}>{ph.invoiceNumber}</td>
                     <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }}>
-                      {ph.periodStart ? fmtPeriod(ph.periodStart, ph.periodEnd) : "—"}
+                      {ph.periodStart ? <ChargePeriod charge={ph} /> : "—"}
                     </td>
                     <td style={{ ...S.td, fontWeight: 700, color: BRAND.green }}>{fmtMMK(ph.amount)}</td>
                     <td style={S.td}>
@@ -1485,7 +1502,7 @@ function StudentSlips({ group, slipCache, onBack }) {
                 </div>
                 {ph.periodStart && (
                   <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 6 }}>
-                    {fmtPeriod(ph.periodStart, ph.periodEnd)}
+                    {chargeText(ph)}
                   </div>
                 )}
               </div>
@@ -1645,17 +1662,47 @@ function TransactionsPage({ paymentHistory, students, batches }) {
 }
 
 // ─── FEE TRACKER ─────────────────────────────────────────────────
-// For each student, builds the sequence of one-month billing periods running from their
-// billing anchor (billingStartDate, falling back to enrolledDate) up to their batch's exam
-// month (or the current month, if the batch has no exam date set yet).
-function buildFeePeriods(student, batch, paymentHistory) {
-  const anchor = student.billingStartDate || student.enrolledDate;
-  if (!anchor) return [];
+// For each student, builds the sequence of payments their plan asks for. Monthly plans run
+// one-month periods from their billing anchor (billingStartDate, falling back to
+// enrolledDate) for the plan's number of months, or — when that is open — up to their
+// batch's exam month (or the current month, if the batch has no exam date set yet).
+// Installment plans are their own fixed list of dated payments. Mirrors
+// server/utils/billing.js, which the invoices themselves come from.
+function planPeriods(student, batch, anchor) {
+  const plan = student.paymentPlan || {};
+  if (plan.kind === "installments" && plan.installments?.length) {
+    const n = plan.installments.length;
+    return plan.installments.map((inst, i) => ({
+      periodStart: i === 0 ? anchor : inst.dueDate,
+      periodEnd: "",
+      label: n === 1 ? "Full payment" : `Installment ${i + 1} of ${n}`,
+      amount: inst.amount,
+    }));
+  }
 
+  const fee = monthlyFeeOf(student, batch);
   const examCutoffMk =
     (batch && examSessionCutoffMonth(batch.examSession)) ||
     (batch && batch.examDate ? batch.examDate.slice(0, 7) : null);
   const nowMk = currentMonthKey();
+  const out = [];
+  for (let idx = 0; idx < (plan.months || 240); idx++) {
+    const periodStart = addMonths(anchor, idx);
+    const mk = periodStart.slice(0, 7);
+    if (!plan.months && (examCutoffMk ? mk > examCutoffMk : mk > nowMk)) break;
+    out.push({
+      periodStart,
+      periodEnd: addMonths(anchor, idx + 1),
+      label: plan.months ? `Month ${idx + 1} of ${plan.months}` : "",
+      amount: fee,
+    });
+  }
+  return out;
+}
+
+function buildFeePeriods(student, batch, paymentHistory) {
+  const anchor = student.billingStartDate || student.enrolledDate;
+  if (!anchor) return [];
   const todayStr = today();
 
   const paidByStart = new Map();
@@ -1663,12 +1710,8 @@ function buildFeePeriods(student, batch, paymentHistory) {
     if (ph.studentId === student.id && ph.periodStart) paidByStart.set(ph.periodStart, ph);
   }
   const periods = [];
-  for (let idx = 0; idx < 240; idx++) {
-    const periodStart = addMonths(anchor, idx);
+  for (const { periodStart, periodEnd, label, amount } of planPeriods(student, batch, anchor)) {
     const mk = periodStart.slice(0, 7);
-    if (examCutoffMk ? mk > examCutoffMk : mk > nowMk) break;
-    const periodEnd = addMonths(anchor, idx + 1);
-
     const ph = paidByStart.get(periodStart);
     let status, paidDate;
     if (ph) {
@@ -1679,7 +1722,7 @@ function buildFeePeriods(student, batch, paymentHistory) {
     } else {
       status = "unpaid";
     }
-    periods.push({ periodStart, periodEnd, monthKey: mk, status, paidDate });
+    periods.push({ periodStart, periodEnd, label, amount: ph ? ph.amount : amount, monthKey: mk, status, paidDate });
   }
   return periods;
 }
@@ -1708,7 +1751,7 @@ function FeeTrackerPage({ students, batches, paymentHistory }) {
   return (
     <div>
       <div style={S.pageTitle}>Fee Tracker</div>
-      <div style={S.pageDesc}>Monthly billing calendar per student — green months are paid, from billing start through their exam month</div>
+      <div style={S.pageDesc}>Billing calendar per student — green payments are paid, following each student's payment plan</div>
 
       <div style={S.statsRow}>
         <div style={S.statCard(BRAND.crimson)}>
@@ -2293,14 +2336,15 @@ export default function OwnerSMS({ onLogout }) {
       <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "'Crimson Pro', Georgia, serif", gap: 12 }}>
         <div style={{ fontSize: 24, color: "#C62828" }}>Could not connect to server</div>
         <div style={{ fontSize: 14, color: "#9E9E9E" }}>{error}</div>
-        <div style={{ fontSize: 13, color: "#9E9E9E" }}>Make sure the Express server is running on port 5000 and MongoDB is connected.</div>
+        <div style={{ fontSize: 13, color: "#9E9E9E" }}>Make sure the Express server is running on port 5001 and MongoDB is connected.</div>
       </div>
     );
   }
 
   // What each batch bills in a month: every active student's own class fee added up. A
   // student on a negotiated fee counts at that fee, not at the batch default, so a batch of
-  // discounted students does not read as though everyone pays list price.
+  // discounted students does not read as though everyone pays list price. Students on an
+  // installment plan have no monthly fee and are left out (see monthlyFeeOf).
   //
   // Owner-only: this is passed to StudentsPage only here, never from TitanSMS, which is what
   // keeps admin and students_admin from seeing it regardless of what those roles have loaded.
@@ -2309,8 +2353,7 @@ export default function OwnerSMS({ onLogout }) {
     if (s.status !== "Active") continue;
     const batch = data.batches.find((b) => b.id === s.batchId);
     if (!batch) continue;
-    const fee = s.customFee != null ? s.customFee : batch.fee;
-    revenueByBatch[batch.id] = (revenueByBatch[batch.id] || 0) + fee;
+    revenueByBatch[batch.id] = (revenueByBatch[batch.id] || 0) + monthlyFeeOf(s, batch);
   }
 
   const pages = {

@@ -67,6 +67,23 @@ const fmtPeriod = (start, end) => {
   const endYear = new Date(end + "T12:00:00").getFullYear();
   return `${fmt(start)} – ${fmt(end)} ${endYear}`;
 };
+// What a charge or payment is for. Monthly billing covers a span ("06 Oct – 06 Nov 2026"),
+// tagged with its place in a fixed-length plan ("Month 3 of 6"); an installment is due on a
+// date rather than covering one, so it is described by its place alone.
+const chargeText = (x) => {
+  if (x.periodStart && x.periodEnd) return fmtPeriod(x.periodStart, x.periodEnd) + (x.label ? ` (${x.label})` : "");
+  return x.label || "—";
+};
+// The same, for table cells: the span on top and the plan position underneath.
+function ChargePeriod({ charge }) {
+  if (!charge.periodEnd) return <>{charge.label || "—"}</>;
+  return (
+    <>
+      {fmtPeriod(charge.periodStart, charge.periodEnd)}
+      {charge.label && <div style={{ fontSize: 11, color: BRAND.grey }}>{charge.label}</div>}
+    </>
+  );
+}
 // ─── STYLES ──────────────────────────────────────────────────────
 const S = {
   app: { display: "flex", minHeight: "100vh", fontFamily: "'Crimson Pro', 'Georgia', serif", background: BRAND.cream, color: BRAND.charcoal },
@@ -521,7 +538,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
                     </td>
                     <td style={S.td} data-label="Batch"><span style={S.tag}>{due.batchName}</span></td>
                     <td style={{ ...S.td, whiteSpace: "nowrap", fontSize: 12 }} data-label="Period">
-                      {fmtPeriod(due.periodStart, due.periodEnd)}
+                      <ChargePeriod charge={due} />
                     </td>
                     <td style={S.td} data-label="Amount">{fmtMMK(due.amount)}</td>
                     <td style={S.td} data-label="Status">
@@ -642,8 +659,8 @@ function InvoicePreview({ invoice, settings }) {
           <div style={{ textAlign: "right" }}>
             {invoice.periodStart && (
               <div style={{ marginBottom: 4 }}>
-                <span style={{ color: BRAND.grey }}>Billing Period:</span>{" "}
-                <strong>{fmtPeriod(invoice.periodStart, invoice.periodEnd)}</strong>
+                <span style={{ color: BRAND.grey }}>{invoice.periodEnd ? "Billing Period:" : "Payment:"}</span>{" "}
+                <strong>{chargeText(invoice)}</strong>
               </div>
             )}
             <div><span style={{ color: BRAND.grey }}>Due Date:</span> {fmtDate(invoice.dueDate)}</div>
@@ -705,7 +722,9 @@ function ReceiptPreview({ payment: ph }) {
   // periodStart is the month the payment prepaid; fall back to the pay date
   // (payments cover one month starting from when they're made)
   const billingStart = ph.periodStart || ph.paidDate;
-  const billingEnd = ph.periodEnd || addOneMonth(billingStart);
+  // Installments carry a label and no end on purpose; only older monthly rows lack one.
+  const billingEnd = ph.periodEnd || (ph.label ? "" : addOneMonth(billingStart));
+  const charge = { periodStart: billingStart, periodEnd: billingEnd, label: ph.label };
 
   async function saveAsImage() {
     if (!receiptRef.current) return;
@@ -754,8 +773,8 @@ function ReceiptPreview({ payment: ph }) {
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ marginBottom: 4 }}>
-                <span style={{ color: BRAND.grey }}>Billing Period:</span>{" "}
-                <strong>{fmtPeriod(billingStart, billingEnd)}</strong>
+                <span style={{ color: BRAND.grey }}>{billingEnd ? "Billing Period:" : "Payment:"}</span>{" "}
+                <strong>{chargeText(charge)}</strong>
               </div>
               <div><span style={{ color: BRAND.grey }}>Paid Date:</span> {fmtDate(ph.paidDate)}</div>
               <div style={{ marginTop: 6 }}>
@@ -777,7 +796,7 @@ function ReceiptPreview({ payment: ph }) {
           </thead>
           <tbody>
             <tr>
-              <td style={S.td}>{ph.batchName} · {fmtPeriod(billingStart, billingEnd)}</td>
+              <td style={S.td}>{ph.batchName} · {chargeText(charge)}</td>
               <td style={{ ...S.td, textAlign: "center" }}>1</td>
               <td style={{ ...S.td, textAlign: "right" }}>{fmtMMK(ph.amount)}</td>
               <td style={{ ...S.td, textAlign: "right", fontWeight: 600 }}>{fmtMMK(ph.amount)}</td>
@@ -919,7 +938,7 @@ function PaymentHistoryPage({ paymentHistory, batches, onDelete, onUpdate }) {
                     <td style={S.td} data-label="Batch"><span style={S.tag}>{ph.batchName}</span></td>
                     <td style={{ ...S.td, fontFamily: "monospace", fontSize: 12 }} data-label="Invoice #">{ph.invoiceNumber}</td>
                     <td style={{ ...S.td, fontSize: 12, whiteSpace: "nowrap" }} data-label="Period">
-                      {ph.periodStart ? fmtPeriod(ph.periodStart, ph.periodEnd) : "—"}
+                      {ph.periodStart ? <ChargePeriod charge={ph} /> : "—"}
                     </td>
                     <td style={{ ...S.td, fontWeight: 700, color: BRAND.green }} data-label="Amount">{fmtMMK(ph.amount)}</td>
                     <td style={S.td} data-label="Paid Date">
@@ -1133,7 +1152,7 @@ export default function TitanSMS({ onLogout }) {
       <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "'Crimson Pro', Georgia, serif", gap: 12 }}>
         <div style={{ fontSize: 24, color: "#C62828" }}>Could not connect to server</div>
         <div style={{ fontSize: 14, color: "#9E9E9E" }}>{error}</div>
-        <div style={{ fontSize: 13, color: "#9E9E9E" }}>Make sure the Express server is running on port 5000 and MongoDB is connected.</div>
+        <div style={{ fontSize: 13, color: "#9E9E9E" }}>Make sure the Express server is running on port 5001 and MongoDB is connected.</div>
       </div>
     );
   }

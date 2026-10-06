@@ -2410,7 +2410,7 @@ export default function TitanSMS() {
       <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: "'Crimson Pro', Georgia, serif", gap: 12 }}>
         <div style={{ fontSize: 24, color: "#C62828" }}>Could not connect to server</div>
         <div style={{ fontSize: 14, color: "#9E9E9E" }}>{error}</div>
-        <div style={{ fontSize: 13, color: "#9E9E9E" }}>Make sure the Express server is running on port 5000 and MongoDB is connected.</div>
+        <div style={{ fontSize: 13, color: "#9E9E9E" }}>Make sure the Express server is running on port 5001 and MongoDB is connected.</div>
       </div>
     );
   }
