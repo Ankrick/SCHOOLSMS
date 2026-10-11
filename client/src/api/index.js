@@ -81,6 +81,9 @@ export const getDues = (from, to) =>
 // request far heavier than the rest, so it gets a longer leash than the shared 20s timeout.
 export const payDue = (payment) =>
   api.patch("/dues/pay", payment, { timeout: 60000 }).then(handle).catch(err);
+// Owner only. `charges` is [{ studentId, periodStart }]; both return the updated students.
+export const removeDues = (charges) => api.post("/dues/remove", { charges }).then(handle).catch(err);
+export const restoreDues = (charges) => api.post("/dues/restore", { charges }).then(handle).catch(err);
 
 // Leads
 export const getLeads = () => api.get("/leads").then(handle).catch(err);

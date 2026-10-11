@@ -20,7 +20,7 @@ exports.getStudents = async (req, res, next) => {
 // month, or the first installment — which is what lets invoicing start from the second.
 exports.createStudent = async (req, res, next) => {
   try {
-    const { firstPayment, ...studentData } = req.body || {};
+    const { firstPayment, removedCharges, ...studentData } = req.body || {};
 
     const { error, paidDate, slip } = readSlipPayload(firstPayment, "a student can be registered");
     if (error) return res.status(400).json({ message: error });
@@ -77,6 +77,9 @@ exports.createStudent = async (req, res, next) => {
 exports.updateStudent = async (req, res, next) => {
   try {
     const update = { ...req.body };
+    // Deleted invoices are managed by the owner through the dues endpoints; a student form
+    // opened before a deletion must not quietly bring the invoice back on save.
+    delete update.removedCharges;
     // The plan is checked against the billing date it will have after this save, so the
     // first installment follows a moved billing date.
     if (update.paymentPlan !== undefined) {

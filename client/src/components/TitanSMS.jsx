@@ -168,12 +168,18 @@ function Badge({ stage }) {
     Paid: [BRAND.green, BRAND.greenLight],
     Unpaid: [BRAND.red, BRAND.redLight],
     Overdue: [BRAND.orange, BRAND.orangeLight],
+    // The collection timeline for unpaid fees (see server/utils/billing.js unpaidStatus).
+    // Remind shares Paid's green, so it carries an icon to tell the two apart at a glance.
+    Upcoming: [BRAND.grey, BRAND.greyLight],
+    Remind: [BRAND.green, BRAND.greenLight],
+    Call: [BRAND.red, BRAND.redLight],
     // Students
     Active: [BRAND.green, BRAND.greenLight],
     Expelled: [BRAND.red, BRAND.redLight],
   };
   const [c, bg] = map[stage] || [BRAND.grey, BRAND.greyLight];
-  return <span style={S.badge(c, bg)}>{stage}</span>;
+  const icon = { Remind: "🔔 ", Call: "📞 " }[stage] || "";
+  return <span style={S.badge(c, bg)}>{icon}{stage}</span>;
 }
 
 function EmptyState({ icon, message, action }) {
@@ -254,7 +260,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     setStatusSort((prev) => (prev === null ? "outstanding" : prev === "outstanding" ? "paid" : null));
   }
 
-  const STATUS_PRIORITY = { Overdue: 0, Unpaid: 1, Paid: 2 };
+  // Most urgent first: who to phone, who is late, who needs a reminder, then the rest.
+  const STATUS_PRIORITY = { Call: 0, Overdue: 1, Remind: 2, Upcoming: 3, Unpaid: 3, Paid: 4 };
 
   const filtered = dues
     .filter((due) => {
@@ -286,9 +293,11 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
 
   // Totals follow the filter, so narrowing to one batch or to the unpaid rows answers
   // "how much is that worth" without arithmetic.
+  // Early reminders belong to next month, so they never count toward these months' totals.
+  const counted = filtered.filter((d) => !d.early);
   const shown = {
-    expected: filtered.reduce((sum, d) => sum + d.amount, 0),
-    collected: filtered.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
+    expected: counted.reduce((sum, d) => sum + d.amount, 0),
+    collected: counted.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
   };
   const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all";
   const view = isFiltered
@@ -296,7 +305,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         expected: shown.expected,
         collected: shown.collected,
         outstanding: shown.expected - shown.collected,
-        studentsLeft: new Set(filtered.filter((d) => d.status !== "Paid").map((d) => d.studentId)).size,
+        studentsLeft: new Set(counted.filter((d) => d.status !== "Paid").map((d) => d.studentId)).size,
       }
     : totals;
 
@@ -395,8 +404,10 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         <select style={{ ...S.select, width: "auto", minWidth: 140 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All Status</option>
           <option value="outstanding">Left to pay</option>
-          <option value="Unpaid">Unpaid</option>
+          <option value="Remind">Remind (due within 3 days)</option>
           <option value="Overdue">Overdue</option>
+          <option value="Call">Call (4+ days late)</option>
+          <option value="Upcoming">Upcoming</option>
           <option value="Paid">Paid</option>
         </select>
         <select style={{ ...S.select, width: "auto", minWidth: 160 }} value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)}>
@@ -547,7 +558,10 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
                         <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 2 }}>{fmtDate(due.paidDate)}</div>
                       )}
                     </td>
-                    <td style={S.td} data-label="Due Date">{fmtDate(due.dueDate)}</td>
+                    <td style={S.td} data-label="Due Date">
+                      {fmtDate(due.dueDate)}
+                      {due.early && <div style={{ fontSize: 11, color: BRAND.grey }}>Due next month</div>}
+                    </td>
                     <td style={S.td} data-label="Actions">
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setPreview(due)} title="Preview the bill">👁️</button>

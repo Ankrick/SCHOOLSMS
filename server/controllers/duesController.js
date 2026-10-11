@@ -6,11 +6,13 @@ const { readSlipPayload, withoutSlipImage } = require("../utils/slip");
 const {
   today,
   currentMonthKey,
+  unpaidStatus,
   addMonths,
   billingAnchor,
   chargeAt,
   periodIndexesInMonth,
   periodIndexOf,
+  isRemoved,
   monthRange,
   makeDue,
 } = require("../utils/billing");
@@ -58,7 +60,7 @@ exports.getDues = async (req, res, next) => {
           // billing it again would be asking twice. Charging starts at the second payment.
           if (index < 1) continue;
           const due = makeDue({ student, batch, settings, index });
-          if (due) byKey.set(due.id, due);
+          if (due && !isRemoved(student, due.periodStart)) byKey.set(due.id, due);
         }
       }
     }
@@ -109,13 +111,44 @@ exports.getDues = async (req, res, next) => {
     const dues = [...byKey.values()].map((due) =>
       due.status === "Paid"
         ? due
-        : { ...due, status: due.dueDate < todayStr ? "Overdue" : "Unpaid" }
+        : { ...due, status: unpaidStatus(due.dueDate, todayStr) }
     );
+
+    // Reminders go out a few days ahead, so at the end of a month some are for fees due early
+    // next month. When the range ends at the current month, those are included — flagged
+    // `early` and kept out of the totals, which still describe only the months asked for.
+    const nowMk = currentMonthKey();
+    if (to === nowMk) {
+      const nextMk = addMonths(`${nowMk}-01`, 1).slice(0, 7);
+      const upcoming = [];
+      for (const student of students) {
+        if (student.status !== "Active" || !billingAnchor(student)) continue;
+        const batch = batchById[student.batchId];
+        for (const index of periodIndexesInMonth(student, batch, nextMk)) {
+          if (index < 1) continue;
+          const due = makeDue({ student, batch, settings, index });
+          if (due && !isRemoved(student, due.periodStart) && unpaidStatus(due.dueDate, todayStr) === "Remind") {
+            upcoming.push(due);
+          }
+        }
+      }
+      if (upcoming.length) {
+        // Anything already paid ahead of time needs no reminder.
+        const paidEarly = await PaymentHistory.find({
+          $or: upcoming.map((d) => ({ studentId: d.studentId, periodStart: d.periodStart })),
+        }).select("studentId periodStart");
+        const paidKeys = new Set(paidEarly.map((ph) => `${ph.studentId}:${ph.periodStart}`));
+        for (const due of upcoming) {
+          if (!paidKeys.has(due.id)) dues.push({ ...due, status: "Remind", early: true });
+        }
+      }
+    }
     dues.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.studentName.localeCompare(b.studentName));
 
-    const collected = dues.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0);
-    const expected = dues.reduce((sum, d) => sum + d.amount, 0);
-    const unpaid = dues.filter((d) => d.status !== "Paid");
+    const inRange = dues.filter((d) => !d.early);
+    const collected = inRange.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0);
+    const expected = inRange.reduce((sum, d) => sum + d.amount, 0);
+    const unpaid = inRange.filter((d) => d.status !== "Paid");
 
     res.json({
       from,
@@ -126,7 +159,9 @@ exports.getDues = async (req, res, next) => {
         collected,
         outstanding: expected - collected,
         studentsLeft: new Set(unpaid.map((d) => d.studentId)).size,
-        overdue: dues.filter((d) => d.status === "Overdue").length,
+        // Past due, whether still at the reminder stage or already needing a call.
+        overdue: dues.filter((d) => d.status === "Overdue" || d.status === "Call").length,
+        call: dues.filter((d) => d.status === "Call").length,
       },
     });
   } catch (err) {
@@ -155,6 +190,9 @@ exports.payDue = async (req, res, next) => {
     const index = periodIndexOf(student, periodStart);
     if (index < 0) {
       return res.status(400).json({ message: "That is not a billing period for this student." });
+    }
+    if (isRemoved(student, periodStart)) {
+      return res.status(400).json({ message: `That invoice for ${student.name} was deleted, so it cannot be paid.` });
     }
     if (index === 0) {
       return res.status(400).json({
@@ -211,3 +249,84 @@ exports.payDue = async (req, res, next) => {
     next(err);
   }
 };
+
+// Reads [{ studentId, periodStart }] from the body and checks each is a real, invoiceable
+// period. Returns { error } or { targets: [{ student, periodStart }] }.
+async function readCharges(body) {
+  const list = Array.isArray(body && body.charges) ? body.charges : [];
+  if (list.length === 0) return { error: "No invoices were given." };
+  if (list.length > 500) return { error: "Too many invoices at once." };
+
+  const ids = [...new Set(list.map((c) => String(c && c.studentId)))];
+  const students = await Student.find({ _id: { $in: ids } }).catch(() => []);
+  const byId = Object.fromEntries(students.map((s) => [s.id, s]));
+
+  const targets = [];
+  for (const c of list) {
+    const student = byId[c && c.studentId];
+    const periodStart = c && c.periodStart;
+    if (!student) return { error: "One of those students no longer exists." };
+    if (typeof periodStart !== "string" || periodIndexOf(student, periodStart) < 1) {
+      return { error: `${student.name} has no invoice starting ${periodStart}.` };
+    }
+    targets.push({ student, periodStart });
+  }
+  return { targets };
+}
+
+// POST /api/dues/remove  { charges: [{ studentId, periodStart }] }   — owner only
+//
+// Deletes invoices. A paid invoice is refused: its payment and slip are the record of money
+// received, and removing that belongs in Payment History, deliberately, one record at a time.
+exports.removeDues = async (req, res, next) => {
+  try {
+    const { error, targets } = await readCharges(req.body);
+    if (error) return res.status(400).json({ message: error });
+
+    const paid = await PaymentHistory.find({
+      $or: targets.map((t) => ({ studentId: t.student.id, periodStart: t.periodStart })),
+    }).select("studentName periodStart");
+    if (paid.length) {
+      return res.status(409).json({
+        message: `${paid[0].studentName}'s invoice is already paid, so it cannot be deleted here. Remove the payment from Payment History first if it was recorded by mistake.`,
+      });
+    }
+
+    const updated = await applyToStudents(targets, "$addToSet");
+    res.json({ removed: targets.length, students: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/dues/restore  { charges: [{ studentId, periodStart }] }   — owner only
+//
+// Undoes a deletion: the period goes back on the student's schedule.
+exports.restoreDues = async (req, res, next) => {
+  try {
+    const { error, targets } = await readCharges(req.body);
+    if (error) return res.status(400).json({ message: error });
+    const updated = await applyToStudents(targets, "$pull");
+    res.json({ restored: targets.length, students: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Adds or pulls the period starts on each student's removedCharges, one write per student,
+// and hands back the updated students so the client's copies stay current.
+async function applyToStudents(targets, op) {
+  const byStudent = new Map();
+  for (const { student, periodStart } of targets) {
+    if (!byStudent.has(student.id)) byStudent.set(student.id, []);
+    byStudent.get(student.id).push(periodStart);
+  }
+  const updated = [];
+  for (const [id, starts] of byStudent) {
+    const change = op === "$addToSet"
+      ? { $addToSet: { removedCharges: { $each: starts } } }
+      : { $pull: { removedCharges: { $in: starts } } };
+    updated.push(await Student.findByIdAndUpdate(id, change, { new: true }));
+  }
+  return updated;
+}

@@ -35,6 +35,10 @@ const studentSchema = new mongoose.Schema(
     billingStartDate: { type: String, default: "" },
     customFee: { type: Number, default: null },
     paymentPlan: { type: paymentPlanSchema, default: () => ({}) },
+    // Period starts the owner deleted from this student's invoices. Billing is derived from
+    // the plan, so a deleted invoice is remembered as an exception to it rather than as a
+    // document removed. Changed only through /api/dues/remove and /restore.
+    removedCharges: { type: [String], default: [] },
     // Who the finance team contacts to send an invoice. Replaces the old parentName +
     // parentFacebook pair in the UI; both are kept below so no existing data is lost.
     invoiceContact: { type: String, default: "" },

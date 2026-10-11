@@ -218,12 +218,18 @@ function Badge({ stage }) {
     Paid: [BRAND.green, BRAND.greenLight],
     Unpaid: [BRAND.red, BRAND.redLight],
     Overdue: [BRAND.orange, BRAND.orangeLight],
+    // The collection timeline for unpaid fees (see server/utils/billing.js unpaidStatus).
+    // Remind shares Paid's green, so it carries an icon to tell the two apart at a glance.
+    Upcoming: [BRAND.grey, BRAND.greyLight],
+    Remind: [BRAND.green, BRAND.greenLight],
+    Call: [BRAND.red, BRAND.redLight],
     Active: [BRAND.green, BRAND.greenLight],
     Inactive: [BRAND.grey, BRAND.greyLight],
     Expelled: [BRAND.red, BRAND.redLight],
   };
   const [c, bg] = map[stage] || [BRAND.grey, BRAND.greyLight];
-  return <span style={S.badge(c, bg)}>{stage}</span>;
+  const icon = { Remind: "🔔 ", Call: "📞 " }[stage] || "";
+  return <span style={S.badge(c, bg)}>{icon}{stage}</span>;
 }
 
 const FEE_STATUS_STYLE = {
@@ -309,6 +315,8 @@ function Dashboard({ data }) {
     .filter((ph) => monthKey(ph.paidDate) === thisMonth)
     .reduce((sum, ph) => sum + ph.amount, 0);
   const overdueInvoices = dues.filter((d) => d.status === "Overdue");
+  const callInvoices = dues.filter((d) => d.status === "Call");
+  const remindInvoices = dues.filter((d) => d.status === "Remind");
   const recentLeads = leads
     .filter((l) => l.stage === "Lead")
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -397,9 +405,19 @@ function Dashboard({ data }) {
 
         <div style={D.panel}>
           <div style={D.panelTitle}>Attention Needed</div>
+          {callInvoices.length > 0 && (
+            <div style={D.notice(BRAND.redLight, BRAND.red)}>
+              <strong>{callInvoices.length}</strong> fee{callInvoices.length > 1 ? "s" : ""} 4+ days late — call the guardian
+            </div>
+          )}
           {overdueInvoices.length > 0 && (
             <div style={D.notice(BRAND.orangeLight, BRAND.orange)}>
               <strong>{overdueInvoices.length}</strong> overdue fee{overdueInvoices.length > 1 ? "s" : ""} pending collection
+            </div>
+          )}
+          {remindInvoices.length > 0 && (
+            <div style={D.notice(BRAND.greenLight, BRAND.green)}>
+              <strong>{remindInvoices.length}</strong> fee{remindInvoices.length > 1 ? "s" : ""} due within 3 days — send reminders
             </div>
           )}
           {strikStudents.length > 0 && (
@@ -407,7 +425,7 @@ function Dashboard({ data }) {
               <strong>{strikStudents.length}</strong> student{strikStudents.length > 1 ? "s" : ""} at 2+ strikes
             </div>
           )}
-          {overdueInvoices.length === 0 && strikStudents.length === 0 && (
+          {overdueInvoices.length === 0 && callInvoices.length === 0 && remindInvoices.length === 0 && strikStudents.length === 0 && (
             <div style={{ color: BRAND.grey, fontSize: 13 }}>All clear — nothing needs urgent attention.</div>
           )}
           {recentLeads.length > 0 && (
@@ -593,7 +611,7 @@ const monthLabel = (mk) =>
 
 const EMPTY_TOTALS = { expected: 0, collected: 0, outstanding: 0, studentsLeft: 0, overdue: 0 };
 
-function InvoicesPage({ students, batches, settings, initialDues, initialTotals, onPaymentRecorded }) {
+function InvoicesPage({ students, batches, settings, initialDues, initialTotals, onPaymentRecorded, onChargesChanged }) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterBatch, setFilterBatch] = useState("all");
@@ -609,6 +627,9 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
   const [receipts, setReceipts] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [statusSort, setStatusSort] = useState(null); // null | "outstanding" | "paid"
+  // The invoices just deleted, kept so the deletion can be undone until the next one.
+  const [lastDeleted, setLastDeleted] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const singleMonth = fromMonth === toMonth;
 
@@ -641,7 +662,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     setStatusSort((prev) => (prev === null ? "outstanding" : prev === "outstanding" ? "paid" : null));
   }
 
-  const STATUS_PRIORITY = { Overdue: 0, Unpaid: 1, Paid: 2 };
+  // Most urgent first: who to phone, who is late, who needs a reminder, then the rest.
+  const STATUS_PRIORITY = { Call: 0, Overdue: 1, Remind: 2, Upcoming: 3, Unpaid: 3, Paid: 4 };
 
   const filtered = dues
     .filter((due) => {
@@ -673,9 +695,11 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
 
   // Totals follow the filter, so narrowing to one batch or to the unpaid rows answers
   // "how much is that worth" without arithmetic.
+  // Early reminders belong to next month, so they never count toward these months' totals.
+  const counted = filtered.filter((d) => !d.early);
   const shown = {
-    expected: filtered.reduce((sum, d) => sum + d.amount, 0),
-    collected: filtered.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
+    expected: counted.reduce((sum, d) => sum + d.amount, 0),
+    collected: counted.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
   };
   const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all";
   const view = isFiltered
@@ -683,7 +707,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         expected: shown.expected,
         collected: shown.collected,
         outstanding: shown.expected - shown.collected,
-        studentsLeft: new Set(filtered.filter((d) => d.status !== "Paid").map((d) => d.studentId)).size,
+        studentsLeft: new Set(counted.filter((d) => d.status !== "Paid").map((d) => d.studentId)).size,
       }
     : totals;
 
@@ -742,6 +766,45 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     if (recorded.length) setReceipts(recorded);
   }
 
+  // Deleting is the owner's alone (the server enforces it) and only for unpaid invoices — a
+  // paid one is the record of money received and is removed from Payment History instead.
+  async function deleteInvoices(toDelete) {
+    if (toDelete.length === 0) return alert("No unpaid invoices in the selection.");
+    const what = toDelete.length === 1
+      ? `${toDelete[0].studentName}'s invoice for ${chargeText(toDelete[0])} (${fmtMMK(toDelete[0].amount)})`
+      : `${toDelete.length} invoices totalling ${fmtMMK(toDelete.reduce((sum, d) => sum + d.amount, 0))}`;
+    if (!confirm(`Delete ${what}? It will no longer be billed. You can undo this straight after.`)) return;
+
+    const charges = toDelete.map((d) => ({ studentId: d.studentId, periodStart: d.periodStart }));
+    setDeleting(true);
+    try {
+      const { students: updated } = await api.removeDues(charges);
+      if (onChargesChanged) onChargesChanged(updated);
+      setLastDeleted({ charges, label: what });
+      setSelected(new Set());
+      setReloadKey((n) => n + 1);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function undoDelete() {
+    if (!lastDeleted) return;
+    setDeleting(true);
+    try {
+      const { students: updated } = await api.restoreDues(lastDeleted.charges);
+      if (onChargesChanged) onChargesChanged(updated);
+      setLastDeleted(null);
+      setReloadKey((n) => n + 1);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const rangeLabel = singleMonth
     ? monthLabel(fromMonth)
     : `${monthLabel(fromMonth)} – ${monthLabel(toMonth)}`;
@@ -782,8 +845,10 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         <select style={{ ...S.select, width: "auto", minWidth: 140 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All Status</option>
           <option value="outstanding">Left to pay</option>
-          <option value="Unpaid">Unpaid</option>
+          <option value="Remind">Remind (due within 3 days)</option>
           <option value="Overdue">Overdue</option>
+          <option value="Call">Call (4+ days late)</option>
+          <option value="Upcoming">Upcoming</option>
           <option value="Paid">Paid</option>
         </select>
         <select style={{ ...S.select, width: "auto", minWidth: 160 }} value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)}>
@@ -838,7 +903,22 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", background: BRAND.blueLight, border: `1px solid ${BRAND.blue}22`, borderRadius: 8, marginBottom: 16, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: BRAND.blue }}>{selected.size} selected</span>
           <button style={S.btn("success")} onClick={bulkMarkPaid}>✅ Mark Paid</button>
+          <button
+            style={S.btn("danger")}
+            onClick={() => deleteInvoices(filtered.filter((d) => selected.has(d.id) && d.status !== "Paid"))}
+            disabled={deleting}
+          >
+            🗑️ Delete
+          </button>
           <button style={{ ...S.btn("secondary"), marginLeft: "auto" }} onClick={() => setSelected(new Set())}>Clear</button>
+        </div>
+      )}
+
+      {lastDeleted && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", background: BRAND.greyLight, border: `1px solid ${BRAND.border}`, borderRadius: 8, marginBottom: 16, flexWrap: "wrap", fontSize: 13 }}>
+          <span>Deleted {lastDeleted.label}.</span>
+          <button style={S.btn("small")} onClick={undoDelete} disabled={deleting}>↩ Undo</button>
+          <button style={{ ...S.btn("ghost"), marginLeft: "auto" }} onClick={() => setLastDeleted(null)}>✕</button>
         </div>
       )}
 
@@ -934,12 +1014,23 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
                         <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 2 }}>{fmtDate(due.paidDate)}</div>
                       )}
                     </td>
-                    <td style={S.td} data-label="Due Date">{fmtDate(due.dueDate)}</td>
+                    <td style={S.td} data-label="Due Date">
+                      {fmtDate(due.dueDate)}
+                      {due.early && <div style={{ fontSize: 11, color: BRAND.grey }}>Due next month</div>}
+                    </td>
                     <td style={S.td} data-label="Actions">
                       <div style={{ display: "flex", gap: 4 }}>
                         <button style={S.btn("small")} onClick={() => setPreview(due)} title="Preview the bill">👁️</button>
                         {due.status !== "Paid" && (
-                          <button style={S.btn("success")} onClick={() => markPaid(due)}>Mark Paid</button>
+                          <>
+                            <button style={S.btn("success")} onClick={() => markPaid(due)}>Mark Paid</button>
+                            <button
+                              style={{ ...S.btn("small"), color: BRAND.red }}
+                              onClick={() => deleteInvoices([due])}
+                              disabled={deleting}
+                              title="Delete this invoice"
+                            >🗑️</button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -1710,7 +1801,10 @@ function buildFeePeriods(student, batch, paymentHistory) {
     if (ph.studentId === student.id && ph.periodStart) paidByStart.set(ph.periodStart, ph);
   }
   const periods = [];
+  const removed = new Set(student.removedCharges || []);
   for (const { periodStart, periodEnd, label, amount } of planPeriods(student, batch, anchor)) {
+    // Invoices the owner deleted are not owed, unless a payment was recorded before deletion.
+    if (removed.has(periodStart) && !paidByStart.has(periodStart)) continue;
     const mk = periodStart.slice(0, 7);
     const ph = paidByStart.get(periodStart);
     let status, paidDate;
@@ -2260,6 +2354,19 @@ export default function OwnerSMS({ onLogout }) {
     }
   }
 
+  // Deleting or restoring invoices changes the students' removedCharges, which the Fee
+  // Tracker reads, and changes what the dashboard counts as owed this month.
+  async function handleChargesChanged(updatedStudents) {
+    const byId = Object.fromEntries((updatedStudents || []).map((s) => [s.id, s]));
+    setData((prev) => ({ ...prev, students: prev.students.map((s) => byId[s.id] || s) }));
+    try {
+      const fresh = await api.getDues();
+      setData((prev) => ({ ...prev, dues: fresh.dues, duesTotals: fresh.totals }));
+    } catch {
+      // A stale dashboard is not worth interrupting the deletion that just succeeded.
+    }
+  }
+
   async function handleUpdatePaymentHistory(id, data) {
     const updated = await api.updatePaymentHistory(id, data);
     setData((prev) => ({
@@ -2391,6 +2498,7 @@ export default function OwnerSMS({ onLogout }) {
         initialDues={data.dues}
         initialTotals={data.duesTotals}
         onPaymentRecorded={handlePaymentRecorded}
+        onChargesChanged={handleChargesChanged}
       />
     ),
     "Payment History": (

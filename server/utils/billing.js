@@ -25,6 +25,26 @@ const EXAM_SESSION_MONTHS = {
 };
 
 const today = () => new Date().toISOString().split("T")[0];
+
+// Where an unpaid charge stands on the collection timeline, counted in days from its due date:
+//   Upcoming  more than REMIND_DAYS_BEFORE days away — nothing to do yet
+//   Remind    from REMIND_DAYS_BEFORE days before, through the due date — send the reminder
+//   Overdue   the days after the due date
+//   Call      from CALL_DAYS_AFTER days after — reminders have not worked, phone the guardian
+const REMIND_DAYS_BEFORE = 3;
+const CALL_DAYS_AFTER = 4;
+
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().split("T")[0];
+}
+
+function unpaidStatus(dueDate, todayStr) {
+  if (todayStr >= addDays(dueDate, CALL_DAYS_AFTER)) return "Call";
+  if (todayStr > dueDate) return "Overdue";
+  if (todayStr >= addDays(dueDate, -REMIND_DAYS_BEFORE)) return "Remind";
+  return "Upcoming";
+}
 const currentMonthKey = () => today().slice(0, 7);
 
 // Add `n` calendar months, clamping to the last valid day: Jan 31 + 1 → Feb 28, not Mar 3.
@@ -232,6 +252,9 @@ function makeDue({ student, batch, settings, index }) {
   };
 }
 
+// Did the owner delete this invoice? Deleted charges are left out of the schedule entirely.
+const isRemoved = (student, periodStart) => (student.removedCharges || []).includes(periodStart);
+
 // Is this a real period start for the student, rather than an arbitrary date?
 function periodIndexOf(student, periodStart) {
   const anchor = billingAnchor(student);
@@ -250,6 +273,7 @@ function periodIndexOf(student, periodStart) {
 
 module.exports = {
   today,
+  unpaidStatus,
   currentMonthKey,
   addMonths,
   examCutoffMonth,
@@ -260,6 +284,7 @@ module.exports = {
   chargeAt,
   periodIndexesInMonth,
   periodIndexOf,
+  isRemoved,
   monthRange,
   makeDue,
 };
