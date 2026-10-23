@@ -219,16 +219,14 @@ function Badge({ stage }) {
     Unpaid: [BRAND.red, BRAND.redLight],
     Overdue: [BRAND.orange, BRAND.orangeLight],
     // The collection timeline for unpaid fees (see server/utils/billing.js unpaidStatus).
-    // Remind shares Paid's green, so it carries an icon to tell the two apart at a glance.
     Upcoming: [BRAND.grey, BRAND.greyLight],
-    Remind: [BRAND.green, BRAND.greenLight],
     Call: [BRAND.red, BRAND.redLight],
     Active: [BRAND.green, BRAND.greenLight],
     Inactive: [BRAND.grey, BRAND.greyLight],
     Expelled: [BRAND.red, BRAND.redLight],
   };
   const [c, bg] = map[stage] || [BRAND.grey, BRAND.greyLight];
-  const icon = { Remind: "🔔 ", Call: "📞 " }[stage] || "";
+  const icon = { Call: "📞 " }[stage] || "";
   return <span style={S.badge(c, bg)}>{icon}{stage}</span>;
 }
 
@@ -316,7 +314,6 @@ function Dashboard({ data }) {
     .reduce((sum, ph) => sum + ph.amount, 0);
   const overdueInvoices = dues.filter((d) => d.status === "Overdue");
   const callInvoices = dues.filter((d) => d.status === "Call");
-  const remindInvoices = dues.filter((d) => d.status === "Remind");
   const recentLeads = leads
     .filter((l) => l.stage === "Lead")
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -407,7 +404,7 @@ function Dashboard({ data }) {
           <div style={D.panelTitle}>Attention Needed</div>
           {callInvoices.length > 0 && (
             <div style={D.notice(BRAND.redLight, BRAND.red)}>
-              <strong>{callInvoices.length}</strong> fee{callInvoices.length > 1 ? "s" : ""} 4+ days late — call the guardian
+              <strong>{callInvoices.length}</strong> fee{callInvoices.length > 1 ? "s" : ""} 7+ days late — call the guardian
             </div>
           )}
           {overdueInvoices.length > 0 && (
@@ -415,17 +412,12 @@ function Dashboard({ data }) {
               <strong>{overdueInvoices.length}</strong> overdue fee{overdueInvoices.length > 1 ? "s" : ""} pending collection
             </div>
           )}
-          {remindInvoices.length > 0 && (
-            <div style={D.notice(BRAND.greenLight, BRAND.green)}>
-              <strong>{remindInvoices.length}</strong> fee{remindInvoices.length > 1 ? "s" : ""} due within 3 days — send reminders
-            </div>
-          )}
           {strikStudents.length > 0 && (
             <div style={D.notice(BRAND.redLight, BRAND.red)}>
               <strong>{strikStudents.length}</strong> student{strikStudents.length > 1 ? "s" : ""} at 2+ strikes
             </div>
           )}
-          {overdueInvoices.length === 0 && callInvoices.length === 0 && remindInvoices.length === 0 && strikStudents.length === 0 && (
+          {overdueInvoices.length === 0 && callInvoices.length === 0 && strikStudents.length === 0 && (
             <div style={{ color: BRAND.grey, fontSize: 13 }}>All clear — nothing needs urgent attention.</div>
           )}
           {recentLeads.length > 0 && (
@@ -662,8 +654,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     setStatusSort((prev) => (prev === null ? "outstanding" : prev === "outstanding" ? "paid" : null));
   }
 
-  // Most urgent first: who to phone, who is late, who needs a reminder, then the rest.
-  const STATUS_PRIORITY = { Call: 0, Overdue: 1, Remind: 2, Upcoming: 3, Unpaid: 3, Paid: 4 };
+  // Most urgent first: who to phone, who is late, then the rest.
+  const STATUS_PRIORITY = { Call: 0, Overdue: 1, Upcoming: 2, Unpaid: 2, Paid: 3 };
 
   const filtered = dues
     .filter((due) => {
@@ -695,11 +687,9 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
 
   // Totals follow the filter, so narrowing to one batch or to the unpaid rows answers
   // "how much is that worth" without arithmetic.
-  // Early reminders belong to next month, so they never count toward these months' totals.
-  const counted = filtered.filter((d) => !d.early);
   const shown = {
-    expected: counted.reduce((sum, d) => sum + d.amount, 0),
-    collected: counted.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
+    expected: filtered.reduce((sum, d) => sum + d.amount, 0),
+    collected: filtered.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
   };
   const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all";
   const view = isFiltered
@@ -707,7 +697,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         expected: shown.expected,
         collected: shown.collected,
         outstanding: shown.expected - shown.collected,
-        studentsLeft: new Set(counted.filter((d) => d.status !== "Paid").map((d) => d.studentId)).size,
+        studentsLeft: new Set(filtered.filter((d) => d.status !== "Paid").map((d) => d.studentId)).size,
       }
     : totals;
 
@@ -845,9 +835,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         <select style={{ ...S.select, width: "auto", minWidth: 140 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All Status</option>
           <option value="outstanding">Left to pay</option>
-          <option value="Remind">Remind (due within 3 days)</option>
           <option value="Overdue">Overdue</option>
-          <option value="Call">Call (4+ days late)</option>
+          <option value="Call">Call (7+ days late)</option>
           <option value="Upcoming">Upcoming</option>
           <option value="Paid">Paid</option>
         </select>
@@ -1016,7 +1005,6 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
                     </td>
                     <td style={S.td} data-label="Due Date">
                       {fmtDate(due.dueDate)}
-                      {due.early && <div style={{ fontSize: 11, color: BRAND.grey }}>Due next month</div>}
                     </td>
                     <td style={S.td} data-label="Actions">
                       <div style={{ display: "flex", gap: 4 }}>

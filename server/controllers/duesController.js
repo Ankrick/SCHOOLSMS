@@ -114,41 +114,11 @@ exports.getDues = async (req, res, next) => {
         : { ...due, status: unpaidStatus(due.dueDate, todayStr) }
     );
 
-    // Reminders go out a few days ahead, so at the end of a month some are for fees due early
-    // next month. When the range ends at the current month, those are included — flagged
-    // `early` and kept out of the totals, which still describe only the months asked for.
-    const nowMk = currentMonthKey();
-    if (to === nowMk) {
-      const nextMk = addMonths(`${nowMk}-01`, 1).slice(0, 7);
-      const upcoming = [];
-      for (const student of students) {
-        if (student.status !== "Active" || !billingAnchor(student)) continue;
-        const batch = batchById[student.batchId];
-        for (const index of periodIndexesInMonth(student, batch, nextMk)) {
-          if (index < 1) continue;
-          const due = makeDue({ student, batch, settings, index });
-          if (due && !isRemoved(student, due.periodStart) && unpaidStatus(due.dueDate, todayStr) === "Remind") {
-            upcoming.push(due);
-          }
-        }
-      }
-      if (upcoming.length) {
-        // Anything already paid ahead of time needs no reminder.
-        const paidEarly = await PaymentHistory.find({
-          $or: upcoming.map((d) => ({ studentId: d.studentId, periodStart: d.periodStart })),
-        }).select("studentId periodStart");
-        const paidKeys = new Set(paidEarly.map((ph) => `${ph.studentId}:${ph.periodStart}`));
-        for (const due of upcoming) {
-          if (!paidKeys.has(due.id)) dues.push({ ...due, status: "Remind", early: true });
-        }
-      }
-    }
     dues.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.studentName.localeCompare(b.studentName));
 
-    const inRange = dues.filter((d) => !d.early);
-    const collected = inRange.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0);
-    const expected = inRange.reduce((sum, d) => sum + d.amount, 0);
-    const unpaid = inRange.filter((d) => d.status !== "Paid");
+    const collected = dues.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0);
+    const expected = dues.reduce((sum, d) => sum + d.amount, 0);
+    const unpaid = dues.filter((d) => d.status !== "Paid");
 
     res.json({
       from,
@@ -159,7 +129,7 @@ exports.getDues = async (req, res, next) => {
         collected,
         outstanding: expected - collected,
         studentsLeft: new Set(unpaid.map((d) => d.studentId)).size,
-        // Past due, whether still at the reminder stage or already needing a call.
+        // Past due, whether merely late or already needing a call.
         overdue: dues.filter((d) => d.status === "Overdue" || d.status === "Call").length,
         call: dues.filter((d) => d.status === "Call").length,
       },

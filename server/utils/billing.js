@@ -27,12 +27,11 @@ const EXAM_SESSION_MONTHS = {
 const today = () => new Date().toISOString().split("T")[0];
 
 // Where an unpaid charge stands on the collection timeline, counted in days from its due date:
-//   Upcoming  more than REMIND_DAYS_BEFORE days away — nothing to do yet
-//   Remind    from REMIND_DAYS_BEFORE days before, through the due date — send the reminder
+//   Upcoming  up to and including the due date — nothing to do yet
 //   Overdue   the days after the due date
-//   Call      from CALL_DAYS_AFTER days after — reminders have not worked, phone the guardian
-const REMIND_DAYS_BEFORE = 3;
-const CALL_DAYS_AFTER = 4;
+//   Call      from CALL_DAYS_AFTER days after — phone the guardian
+// There is no advance-reminder stage: fees are not chased before they fall due.
+const CALL_DAYS_AFTER = 7;
 
 function addDays(dateStr, n) {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -42,7 +41,6 @@ function addDays(dateStr, n) {
 function unpaidStatus(dueDate, todayStr) {
   if (todayStr >= addDays(dueDate, CALL_DAYS_AFTER)) return "Call";
   if (todayStr > dueDate) return "Overdue";
-  if (todayStr >= addDays(dueDate, -REMIND_DAYS_BEFORE)) return "Remind";
   return "Upcoming";
 }
 const currentMonthKey = () => today().slice(0, 7);
