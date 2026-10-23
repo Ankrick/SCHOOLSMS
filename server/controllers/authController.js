@@ -13,18 +13,31 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+// FINANCE_ACCOUNTS / OPERATOR_ACCOUNTS hold any number of logins as
+// "username:password,username:password". Split on the first colon only, so a password may
+// contain one; a comma always starts the next account.
+function parseAccounts(role, value) {
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const sep = entry.indexOf(":");
+      return sep > 0
+        ? { role, username: entry.slice(0, sep), password: entry.slice(sep + 1) }
+        : null;
+    })
+    .filter(Boolean);
+}
+
 function getAccounts() {
   return [
     // Owner sees everything. Optional: with OWNER_USERNAME/OWNER_PASSWORD unset, safeEqual
     // compares against "" and login already rejects empty credentials, so the account
     // simply never matches rather than the server refusing to start.
     { role: "owner", username: process.env.OWNER_USERNAME, password: process.env.OWNER_PASSWORD },
-    { role: "admin", username: process.env.ADMIN_USERNAME, password: process.env.ADMIN_PASSWORD },
-    {
-      role: "students_admin",
-      username: process.env.STUDENTS_ADMIN_USERNAME,
-      password: process.env.STUDENTS_ADMIN_PASSWORD,
-    },
+    ...parseAccounts("finance", process.env.FINANCE_ACCOUNTS),
+    ...parseAccounts("operator", process.env.OPERATOR_ACCOUNTS),
   ];
 }
 

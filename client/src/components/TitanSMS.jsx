@@ -30,16 +30,16 @@ const BRAND = {
 // Tabs for the two scoped accounts. The owner gets the full console instead — see
 // OwnerSMS.jsx, picked in App.jsx. The server enforces this split as well
 // (server/middleware/roleGuard.js); this only decides what to render.
-//   admin          — finance only.
-//   students_admin — the Students tab, which covers batches too.
+//   finance  — students and batches (full edit), invoices and payment history.
+//   operator — the Students tab, read-only and without fees.
 const TABS_BY_ROLE = {
-  admin: ["Invoices", "Payment History"],
-  students_admin: ["Students"],
+  finance: ["Students", "Invoices", "Payment History"],
+  operator: ["Students"],
 };
 
 // Roles whose data load includes invoices, payments and revenue. Everyone else would get
 // a 403 from those endpoints. Students and batches are readable by every role.
-const CAN_SEE_FINANCE = ["owner", "admin"];
+const CAN_SEE_FINANCE = ["owner", "finance"];
 
 const ICONS = {
   Students: "🎓", Invoices: "🧾", "Payment History": "💳",
@@ -1034,7 +1034,7 @@ export default function TitanSMS({ onLogout }) {
   const role = api.getRole();
   const canSeeFinance = CAN_SEE_FINANCE.includes(role);
   // Unknown roles fall back to the most restricted tab set.
-  const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.students_admin;
+  const tabs = TABS_BY_ROLE[role] || TABS_BY_ROLE.operator;
   const [activeTab, setActiveTab] = useState(tabs[0]);
   const [data, setData] = useState({ students: [], batches: [], dues: [], duesTotals: {}, settings: {}, paymentHistory: [] });
   const [loading, setLoading] = useState(true);
@@ -1045,7 +1045,7 @@ export default function TitanSMS({ onLogout }) {
       try {
         // Every role reads students and batches; the invoice screens need their names.
         if (!canSeeFinance) {
-          // students_admin: the billing endpoints would 403.
+          // operator: the billing endpoints would 403.
           const [students, batches] = await Promise.all([api.getStudents(), api.getBatches()]);
           setData((prev) => ({ ...prev, students, batches }));
           return;
@@ -1183,6 +1183,7 @@ export default function TitanSMS({ onLogout }) {
         onSaveBatch={handleSaveBatch}
         onDeleteBatch={handleDeleteBatch}
         receiptRenderer={(payment) => <ReceiptPreview payment={payment} />}
+        readOnly={!canSeeFinance}
       />
     ),
     Invoices: (

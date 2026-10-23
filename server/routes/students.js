@@ -3,8 +3,8 @@ const router = express.Router();
 const ctrl = require("../controllers/studentController");
 const { requireRole, MANAGE_RECORDS } = require("../middleware/roleGuard");
 
-// Reading is open to any signed-in account (admin's invoice screens need student names).
-// Changing student records belongs to owner and students_admin.
+// Reading is open to any signed-in account; operators get a trimmed record (see
+// getStudents). Changing student records belongs to owner and finance.
 const canManage = requireRole(...MANAGE_RECORDS);
 
 router.get("/", ctrl.getStudents);

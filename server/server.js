@@ -6,18 +6,19 @@ const errorHandler = require("./middleware/errorHandler");
 const auth = require("./middleware/auth");
 const { requireRole, MANAGE_FINANCE } = require("./middleware/roleGuard");
 
-["JWT_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "STUDENTS_ADMIN_USERNAME", "STUDENTS_ADMIN_PASSWORD"].forEach((key) => {
-  if (!process.env[key]) {
-    console.error(`Missing required environment variable: ${key}`);
-    process.exit(1);
-  }
-});
+if (!process.env.JWT_SECRET) {
+  console.error("Missing required environment variable: JWT_SECRET");
+  process.exit(1);
+}
 
-// The owner account is optional on purpose: a missing value here disables that one login
-// instead of taking the whole server down on a deploy where it wasn't set yet.
+// The logins are optional on purpose: a missing value disables those logins instead of
+// taking the whole server down on a deploy where it wasn't set yet.
 if (!process.env.OWNER_USERNAME || !process.env.OWNER_PASSWORD) {
   console.warn("OWNER_USERNAME / OWNER_PASSWORD not set — the owner login is disabled.");
 }
+["FINANCE_ACCOUNTS", "OPERATOR_ACCOUNTS"].forEach((key) => {
+  if (!process.env[key]) console.warn(`${key} not set — no ${key.split("_")[0].toLowerCase()} logins.`);
+});
 
 const app = express();
 
@@ -33,18 +34,18 @@ app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 app.use("/api/auth", require("./routes/auth"));
 
-// Any signed-in account may READ students and batches — the invoice screens need student
-// and batch names to render. Writing them is owner/students_admin only, enforced per-verb
-// inside these two routers.
+// Any signed-in account may READ students and batches; operators get them without fees or
+// billing details (the controllers trim the fields). Writing them is owner/finance only,
+// enforced per-verb inside these two routers.
 app.use("/api/students", auth, require("./routes/students"));
 app.use("/api/batches", auth, require("./routes/batches"));
 
-// Billing records — what is owed and what has been collected: owner and admin. Dues are
+// Billing records — what is owed and what has been collected: owner and finance. Dues are
 // derived from each student's billing schedule rather than stored, so there is no monthly
 // "generate" step and any month, past or future, can be asked for.
 app.use("/api/dues", auth, requireRole(...MANAGE_FINANCE), require("./routes/dues"));
 app.use("/api/payment-history", auth, requireRole(...MANAGE_FINANCE), require("./routes/paymentHistory"));
-// Settings: admin reads them (invoice previews use the prefix and currency); only the
+// Settings: finance reads them (invoice previews use the prefix and currency); only the
 // owner changes them — enforced per-verb inside the router.
 app.use("/api/settings", auth, requireRole(...MANAGE_FINANCE), require("./routes/settings"));
 

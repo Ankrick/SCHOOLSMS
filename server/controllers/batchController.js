@@ -1,9 +1,15 @@
 const Batch = require("../models/Batch");
 const Student = require("../models/Student");
 
+const OPERATOR_BATCH_FIELDS = "name syllabus days maxStudents examSession examDate sessionsPerMonth";
+
 exports.getBatches = async (req, res, next) => {
   try {
-    const batches = await Batch.find().sort({ name: 1 });
+    const query = Batch.find().sort({ name: 1 });
+    // Operators don't see what a class costs. An allow-list rather than "-fee", because
+    // stored batches also carry teacher commission fields the schema doesn't declare.
+    if (req.user.role === "operator") query.select(OPERATOR_BATCH_FIELDS);
+    const batches = await query;
     res.json(batches);
   } catch (err) {
     next(err);

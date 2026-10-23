@@ -3,8 +3,8 @@ const router = express.Router();
 const ctrl = require("../controllers/batchController");
 const { requireRole, MANAGE_RECORDS } = require("../middleware/roleGuard");
 
-// Reading is open to any signed-in account (admin's invoice screens need batch names).
-// Changing batches, fee included, belongs to owner and students_admin.
+// Reading is open to any signed-in account; operators get batches without the fee (see
+// getBatches). Changing batches, fee included, belongs to owner and finance.
 const canManage = requireRole(...MANAGE_RECORDS);
 
 router.get("/", ctrl.getBatches);

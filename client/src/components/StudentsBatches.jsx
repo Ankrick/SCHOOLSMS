@@ -9,6 +9,10 @@
 //   revenueByBatch  - when supplied ({ batchId: monthly total }), each batch card shows what
 //                     it bills in a month. Owner-only: the shell decides who gets this by
 //                     deciding whether to compute and pass it at all.
+//   readOnly        - the operator view: nothing can be added, edited or removed, and fees,
+//                     billing and payment plans are not shown. The server already leaves
+//                     those fields out for operators; this keeps the page from drawing
+//                     empty slots for them.
 
 import { useState, useMemo, Fragment } from "react";
 import { SlipFields, SlipMissingNote, emptySlipPayment, isSlipComplete } from "./PaymentSlip";
@@ -172,16 +176,22 @@ function EmptyState({ icon, message, action }) {
 }
 
 // ─── STUDENT DETAIL CARD (inside the batch window) ───────────────
-function StudentDetailCard({ student, batch, onEdit, onDelete, onAddStrike, onRemoveStrike }) {
-  // Exactly these four, always shown in this order — a missing one reads "—" rather than
+function StudentDetailCard({ student, batch, readOnly, onEdit, onDelete, onAddStrike, onRemoveStrike }) {
+  // Exactly these rows, always shown in this order — a missing one reads "—" rather than
   // vanishing, so every card lines up and a gap is obvious. Everything else lives in Edit.
+  // Read-only (operator) cards show contact details only; billing never reaches them.
   const billing = student.billingStartDate || student.enrolledDate;
-  const rows = [
-    ["Student Telegram", student.telegram],
-    ["Guardian fb contact", student.invoiceContact],
-    ["Billing Date", billing ? fmtDate(billing) : null],
-    ["Payment Plan", planSummary(student, batch)],
-  ];
+  const rows = readOnly
+    ? [
+        ["Student Telegram", student.telegram],
+        ["Parent Phone", student.parentPhone],
+      ]
+    : [
+        ["Student Telegram", student.telegram],
+        ["Guardian fb contact", student.invoiceContact],
+        ["Billing Date", billing ? fmtDate(billing) : null],
+        ["Payment Plan", planSummary(student, batch)],
+      ];
 
   return (
     <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 16, background: BRAND.white }}>
@@ -190,13 +200,15 @@ function StudentDetailCard({ student, batch, onEdit, onDelete, onAddStrike, onRe
           <div style={{ fontWeight: 700, fontSize: 15 }}>{student.name}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
             <Badge stage={student.status} />
-            <Strikes count={student.strikes} />
+            {!readOnly && <Strikes count={student.strikes} />}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-          <button style={S.btn("small")} onClick={() => onEdit(student)}>✏️ Edit</button>
-          <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => onDelete(student.id)}>🗑️</button>
-        </div>
+        {!readOnly && (
+          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+            <button style={S.btn("small")} onClick={() => onEdit(student)}>✏️ Edit</button>
+            <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => onDelete(student.id)}>🗑️</button>
+          </div>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 12px", fontSize: 13 }}>
@@ -210,13 +222,15 @@ function StudentDetailCard({ student, batch, onEdit, onDelete, onAddStrike, onRe
         ))}
       </div>
 
-      <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontSize: 11, color: BRAND.grey, textTransform: "uppercase", letterSpacing: "0.5px" }}>Strikes</span>
-        <button style={{ ...S.btn("small"), padding: "2px 8px" }} onClick={() => onAddStrike(student.id).catch((e) => alert(e.message))}>+</button>
-        {student.strikes > 0 && (
-          <button style={{ ...S.btn("small"), padding: "2px 8px" }} onClick={() => onRemoveStrike(student.id).catch((e) => alert(e.message))}>−</button>
-        )}
-      </div>
+      {!readOnly && (
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 11, color: BRAND.grey, textTransform: "uppercase", letterSpacing: "0.5px" }}>Strikes</span>
+          <button style={{ ...S.btn("small"), padding: "2px 8px" }} onClick={() => onAddStrike(student.id).catch((e) => alert(e.message))}>+</button>
+          {student.strikes > 0 && (
+            <button style={{ ...S.btn("small"), padding: "2px 8px" }} onClick={() => onRemoveStrike(student.id).catch((e) => alert(e.message))}>−</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -655,6 +669,7 @@ export function StudentsPage({
   onSaveBatch, onDeleteBatch,
   receiptRenderer,
   revenueByBatch,
+  readOnly = false,
 }) {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("Active");
@@ -751,15 +766,15 @@ export function StudentsPage({
           <option value="Inactive">Inactive</option>
           <option value="Expelled">Expelled</option>
         </select>
-        <button style={S.btn("gold")} onClick={() => setShowAddBatch(true)}>➕ Add Batch</button>
+        {!readOnly && <button style={S.btn("gold")} onClick={() => setShowAddBatch(true)}>➕ Add Batch</button>}
       </div>
 
       {groups.length === 0 ? (
         <div style={S.card} className="card">
           <EmptyState
             icon="🎓"
-            message="No batches yet — create one to start placing students"
-            action={<button style={S.btn("gold")} onClick={() => setShowAddBatch(true)}>Add First Batch</button>}
+            message={readOnly ? "No batches yet" : "No batches yet — create one to start placing students"}
+            action={!readOnly && <button style={S.btn("gold")} onClick={() => setShowAddBatch(true)}>Add First Batch</button>}
           />
         </div>
       ) : (
@@ -794,7 +809,7 @@ export function StudentsPage({
                     </div>
                   </div>
                   {/* Batch actions must not open the window */}
-                  {batch && (
+                  {batch && !readOnly && (
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
                       <button style={S.btn("small")} onClick={() => setEditingBatch(batch)}>Edit</button>
                       <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => deleteBatch(batch.id)}>🗑️</button>
@@ -811,9 +826,11 @@ export function StudentsPage({
                     <div style={{ height: 8, borderRadius: 4, background: BRAND.greyLight, overflow: "hidden", marginBottom: 16 }}>
                       <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: pct >= 90 ? BRAND.red : pct >= 70 ? BRAND.gold : BRAND.green, borderRadius: 4 }} />
                     </div>
-                    <div style={{ fontSize: 13, color: BRAND.grey }}>
-                      Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(batch.fee)}</strong>/month
-                    </div>
+                    {!readOnly && (
+                      <div style={{ fontSize: 13, color: BRAND.grey }}>
+                        Fee: <strong style={{ color: BRAND.charcoal }}>{fmtMMK(batch.fee)}</strong>/month
+                      </div>
+                    )}
                     {revenueByBatch && (
                       <div style={{ fontSize: 13, color: BRAND.grey, marginTop: 4 }}>
                         Revenue: <strong style={{ color: BRAND.green }}>{fmtMMK(revenueByBatch[batch.id] || 0)}</strong>/month
@@ -839,12 +856,13 @@ export function StudentsPage({
                     </div>
                   ) : (
                     // Chips jump straight to a student; they must not open the batch window.
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                    // Read-only chips have nowhere to jump, so they open the window instead.
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }} onClick={readOnly ? undefined : (e) => e.stopPropagation()}>
                       {batchStudents.map((s) => (
                         <button
                           key={s.id}
-                          onClick={() => setEditingStudent(s)}
-                          title={`Edit ${s.name}`}
+                          onClick={readOnly ? undefined : () => setEditingStudent(s)}
+                          title={readOnly ? s.name : `Edit ${s.name}`}
                           style={{ ...S.btn("small"), gap: 6, padding: "4px 10px", opacity: s.status === "Active" ? 1 : 0.6 }}
                         >
                           {s.name}
@@ -873,19 +891,21 @@ export function StudentsPage({
                 ? [
                     `${openGroup.batch.syllabus} • ${openGroup.batch.days}`,
                     `${openGroup.students.filter((s) => s.status === "Active").length} / ${openGroup.batch.maxStudents} students`,
-                    `${fmtMMK(openGroup.batch.fee)}/month`,
+                    readOnly ? null : `${fmtMMK(openGroup.batch.fee)}/month`,
                     openGroup.batch.examDate ? `Exam ${fmtDate(openGroup.batch.examDate)}` : null,
                   ].filter(Boolean).join("  •  ")
                 : "These students are not in a batch yet"}
             </div>
-            <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-              <button style={S.btn("primary")} onClick={() => setAddingToBatchKey(openBatchKey)}>
-                ➕ Add Student
-              </button>
-              {openGroup.batch && (
-                <button style={S.btn("small")} onClick={() => setEditingBatch(openGroup.batch)}>Edit batch</button>
-              )}
-            </div>
+            {!readOnly && (
+              <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <button style={S.btn("primary")} onClick={() => setAddingToBatchKey(openBatchKey)}>
+                  ➕ Add Student
+                </button>
+                {openGroup.batch && (
+                  <button style={S.btn("small")} onClick={() => setEditingBatch(openGroup.batch)}>Edit batch</button>
+                )}
+              </div>
+            )}
           </div>
 
           {openGroup.students.length === 0 ? (
@@ -895,9 +915,11 @@ export function StudentsPage({
                 ? "No students in this batch match the current filter"
                 : "No students in this batch yet"}
               action={
-                <button style={S.btn("primary")} onClick={() => setAddingToBatchKey(openBatchKey)}>
-                  ➕ Add Student
-                </button>
+                !readOnly && (
+                  <button style={S.btn("primary")} onClick={() => setAddingToBatchKey(openBatchKey)}>
+                    ➕ Add Student
+                  </button>
+                )
               }
             />
           ) : (
@@ -907,6 +929,7 @@ export function StudentsPage({
                   key={s.id}
                   student={s}
                   batch={openGroup.batch}
+                  readOnly={readOnly}
                   onEdit={setEditingStudent}
                   onDelete={deleteStudent}
                   onAddStrike={onAddStrike}

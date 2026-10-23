@@ -1,16 +1,18 @@
 // Role-based access control.
 //
-//   owner          — everything.
-//   admin          — finance only: invoices, payment history, settings, leads, teachers,
-//                    data import/reset. Reads students and batches (the invoice screens
-//                    need the names) but cannot change them.
-//   students_admin — students and batches, fees included. No billing records.
+//   owner    — everything.
+//   finance  — invoices, payment history, and students and batches (fees included): add,
+//              edit and delete. Reads settings but cannot change them.
+//   operator — read-only students and batches, cut down to name, batch, parent phone and
+//              student Telegram. No fees and no billing records — the student and batch
+//              controllers strip those fields for this role.
 //
 // Hiding tabs in the UI is not enough, since the API can be called directly, so the
 // restriction is enforced here.
 
-const MANAGE_RECORDS = ["owner", "students_admin"];
-const MANAGE_FINANCE = ["owner", "admin"];
+const ROLES = ["owner", "finance", "operator"];
+const MANAGE_RECORDS = ["owner", "finance"];
+const MANAGE_FINANCE = ["owner", "finance"];
 
 function requireRole(...allowed) {
   return (req, res, next) => {
@@ -21,4 +23,4 @@ function requireRole(...allowed) {
   };
 }
 
-module.exports = { requireRole, MANAGE_RECORDS, MANAGE_FINANCE };
+module.exports = { requireRole, ROLES, MANAGE_RECORDS, MANAGE_FINANCE };

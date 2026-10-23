@@ -5,9 +5,16 @@ const PaymentHistory = require("../models/PaymentHistory");
 const { readSlipPayload, withoutSlipImage } = require("../utils/slip");
 const { billingAnchor, normalizePlan, chargeAt } = require("../utils/billing");
 
+// All an operator gets of a student: who they are, which batch, and how to reach them.
+// Status rides along so the page can still filter to active students. Fees, payment plans,
+// billing dates and the guardian contact finance invoices are left out.
+const OPERATOR_STUDENT_FIELDS = "name nameBurmese batchId status parentPhone telegram";
+
 exports.getStudents = async (req, res, next) => {
   try {
-    const students = await Student.find().sort({ name: 1 });
+    const query = Student.find().sort({ name: 1 });
+    if (req.user.role === "operator") query.select(OPERATOR_STUDENT_FIELDS);
+    const students = await query;
     res.json(students);
   } catch (err) {
     next(err);

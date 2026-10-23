@@ -2454,7 +2454,7 @@ export default function OwnerSMS({ onLogout }) {
   // installment plan have no monthly fee and are left out (see monthlyFeeOf).
   //
   // Owner-only: this is passed to StudentsPage only here, never from TitanSMS, which is what
-  // keeps admin and students_admin from seeing it regardless of what those roles have loaded.
+  // keeps finance and operator from seeing it regardless of what those roles have loaded.
   const revenueByBatch = {};
   for (const s of data.students) {
     if (s.status !== "Active") continue;
