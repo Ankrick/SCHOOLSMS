@@ -24,13 +24,19 @@ const EXAM_SESSION_MONTHS = {
   oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
 };
 
-const today = () => new Date().toISOString().split("T")[0];
+// The school runs on Myanmar time (UTC+6:30, no daylight saving). The calendar day has to be
+// Myanmar's rather than the server's UTC one, or until 6:30am a fee due today still reads as
+// due tomorrow — and on the 1st, the whole month's invoices are still last month's.
+const MYANMAR_OFFSET_MS = 6.5 * 60 * 60 * 1000;
+const today = () => new Date(Date.now() + MYANMAR_OFFSET_MS).toISOString().split("T")[0];
 
 // Where an unpaid charge stands on the collection timeline, counted in days from its due date:
-//   Upcoming  up to and including the due date — nothing to do yet
-//   Overdue   the days after the due date
+//   Upcoming  before the due date — nothing to do yet
+//   Due       from the due date until OVERDUE_DAYS_AFTER
+//   Overdue   from OVERDUE_DAYS_AFTER days after
 //   Call      from CALL_DAYS_AFTER days after — phone the guardian
 // There is no advance-reminder stage: fees are not chased before they fall due.
+const OVERDUE_DAYS_AFTER = 3;
 const CALL_DAYS_AFTER = 7;
 
 function addDays(dateStr, n) {
@@ -40,8 +46,8 @@ function addDays(dateStr, n) {
 
 function unpaidStatus(dueDate, todayStr) {
   if (todayStr >= addDays(dueDate, CALL_DAYS_AFTER)) return "Call";
-  if (todayStr > dueDate) return "Overdue";
-  return "Upcoming";
+  if (todayStr >= addDays(dueDate, OVERDUE_DAYS_AFTER)) return "Overdue";
+  return todayStr >= dueDate ? "Due" : "Upcoming";
 }
 const currentMonthKey = () => today().slice(0, 7);
 

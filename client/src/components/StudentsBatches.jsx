@@ -14,9 +14,11 @@
 //                     those fields out for operators; this keeps the page from drawing
 //                     empty slots for them.
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useEffect, useMemo, Fragment } from "react";
 import { SlipFields, SlipMissingNote, emptySlipPayment, isSlipComplete } from "./PaymentSlip";
 import { planSummary } from "../paymentPlan";
+import { today } from "../dates";
+import { getNewStudentsPerMonth } from "../api";
 
 const BRAND = {
   crimson: "#8B1A1A",
@@ -109,7 +111,6 @@ const fmtMMK = (n) => new Intl.NumberFormat("en-US").format(n) + " MMK";
 const fmtDate = (d) =>
   d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const fmtDateInput = (d) => (d ? new Date(d).toISOString().split("T")[0] : "");
-const today = () => new Date().toISOString().split("T")[0];
 // Add `n` calendar months, clamping to the month's last day — the same arithmetic the server
 // bills with, so suggested installment dates land where monthly billing would.
 const addMonths = (dateStr, n) => {
@@ -659,6 +660,181 @@ function BatchForm({ batch, teachers = [], onSave, onClose }) {
         <button style={S.btn("primary")} onClick={submit} disabled={saving}>{saving ? "Saving…" : "Save Batch"}</button>
       </div>
     </Modal>
+  );
+}
+
+// ─── NEW STUDENTS PER MONTH ──────────────────────────────────────
+// Owner and operator only: those two shells are the ones with this tab, and the server
+// refuses anyone else. Loads each time the tab opens, so a student just added is counted.
+// showMoney is what the owner's shell passes; the server only sends money to the owner, so
+// for anyone else there is nothing here to reveal.
+const fmtMonth = (month, opts = { month: "long", year: "numeric" }) => {
+  const [year, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, m - 1, 1)).toLocaleDateString("en-GB", { ...opts, timeZone: "UTC" });
+};
+const fmtJoined = (date) =>
+  new Date(`${date.slice(0, 10)}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+
+// Only active students are billed, so only they add to the money figures.
+function moneyTotals(students) {
+  const active = students.filter((s) => s.status === "Active");
+  const onInstallments = active.filter((s) => s.installments);
+  return {
+    monthly: active.reduce((sum, s) => sum + (s.monthlyFee || 0), 0),
+    installmentCount: onInstallments.length,
+    installmentTotal: onInstallments.reduce((sum, s) => sum + s.installments.total, 0),
+  };
+}
+
+function StudentMoney({ student }) {
+  const amount = { fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" };
+  const note = { fontSize: 12, color: BRAND.grey };
+  if (student.status !== "Active") return <div style={note}>Not billed</div>;
+  if (student.installments) {
+    const { count, total } = student.installments;
+    return (
+      <>
+        <div style={amount}>{fmtMMK(total)}</div>
+        <div style={note}>{count === 1 ? "one payment" : `in ${count} installments`}</div>
+      </>
+    );
+  }
+  return (
+    <>
+      <div style={amount}>{fmtMMK(student.monthlyFee)}</div>
+      <div style={note}>per month</div>
+    </>
+  );
+}
+
+function NewStudentBatch({ name, students, showMoney }) {
+  const { monthly } = moneyTotals(students);
+  return (
+    <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
+      <div style={{ ...S.flexBetween, gap: 12, flexWrap: "wrap", padding: "14px 20px", background: BRAND.cream, borderBottom: `1px solid ${BRAND.border}` }}>
+        <div style={{ fontWeight: 700, fontSize: 15, minWidth: 0 }}>{name}</div>
+        <div style={{ fontSize: 13, color: BRAND.grey }}>
+          {students.length} new{showMoney && monthly > 0 && <> · <strong style={{ color: BRAND.green }}>{fmtMMK(monthly)}</strong>/month</>}
+        </div>
+      </div>
+      {students.map((s, i) => (
+        <div key={s.id} style={{ ...S.flexBetween, gap: 16, padding: "12px 20px", borderTop: i ? `1px solid ${BRAND.border}` : "none", opacity: s.status === "Active" ? 1 : 0.75 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{s.name}</div>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 2, fontSize: 12, color: BRAND.grey }}>
+              {s.nameBurmese && s.nameBurmese !== s.name && <span>{s.nameBurmese}</span>}
+              <span>Joined {fmtJoined(s.enrolledDate)}</span>
+              {s.status !== "Active" && <Badge stage={s.status} />}
+            </div>
+          </div>
+          {showMoney && <div style={{ textAlign: "right", flexShrink: 0 }}><StudentMoney student={s} /></div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function NewStudentsPage({ showMoney = false }) {
+  const [months, setMonths] = useState(null);
+  const [error, setError] = useState(null);
+  // Null follows the newest month, which is the current one.
+  const [picked, setPicked] = useState(null);
+
+  useEffect(() => {
+    getNewStudentsPerMonth().then(setMonths).catch((err) => setError(err.message));
+  }, []);
+
+  const header = (
+    <>
+      <div style={S.pageTitle} className="page-title">New Students</div>
+      <div style={S.pageDesc}>Who joined each month and which batch they are in</div>
+    </>
+  );
+
+  if (error) return <div>{header}<div style={S.card} className="card"><div style={{ color: BRAND.red, fontSize: 14 }}>{error}</div></div></div>;
+  if (!months) return <div>{header}<div style={{ color: BRAND.grey, fontSize: 14 }}>Loading…</div></div>;
+  if (months.length === 0) return <div>{header}<div style={S.card} className="card"><EmptyState icon="🎓" message="No students enrolled yet" /></div></div>;
+
+  const index = Math.max(0, months.findIndex((m) => m.month === picked));
+  const { month, students } = months[index];
+  const previous = months[index + 1];
+  const latestWithStudents = months.find((m) => m.students.length > 0);
+
+  // Biggest intake first; students without a batch always go last.
+  const groups = Object.values(
+    students.reduce((acc, s) => {
+      const key = s.batchId || "__none";
+      (acc[key] = acc[key] || { key, name: s.batchName || "No batch assigned", students: [] }).students.push(s);
+      return acc;
+    }, {})
+  ).sort((a, b) => (a.key === "__none") - (b.key === "__none") || b.students.length - a.students.length || a.name.localeCompare(b.name));
+
+  const totals = moneyTotals(students);
+
+  return (
+    <div>
+      {header}
+
+      {/* Month picker: newest first, each with its count, so the trend reads without opening any */}
+      <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 8, marginBottom: 16 }}>
+        {months.map((m) => {
+          const active = m.month === month;
+          return (
+            <button
+              key={m.month}
+              onClick={() => setPicked(m.month)}
+              aria-pressed={active}
+              style={{
+                flexShrink: 0, minWidth: 76, padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "center",
+                background: active ? BRAND.crimson : BRAND.white,
+                color: active ? BRAND.white : BRAND.charcoal,
+                border: `1px solid ${active ? BRAND.crimson : BRAND.border}`,
+              }}
+            >
+              <div style={{ fontSize: 12, whiteSpace: "nowrap", opacity: active ? 0.9 : 0.7 }}>{fmtMonth(m.month, { month: "short", year: "numeric" })}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.2 }}>{m.students.length}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {students.length > 0 && (
+        <div style={S.statsRow}>
+          <div style={S.statCard(BRAND.crimson)}>
+            <div style={S.statNum}>{students.length}</div>
+            <div style={S.statLabel}>New in {fmtMonth(month)}</div>
+            {previous && <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 6 }}>{previous.students.length} in {fmtMonth(previous.month, { month: "long" })}</div>}
+          </div>
+          {showMoney && (
+            <div style={S.statCard(BRAND.green)}>
+              <div style={S.statNum}>{fmtMMK(totals.monthly)}</div>
+              <div style={S.statLabel}>Per month from these students</div>
+              {totals.installmentCount > 0 && (
+                <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 6 }}>
+                  Plus {fmtMMK(totals.installmentTotal)} from {totals.installmentCount} on installments
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {students.length === 0 ? (
+        <div style={S.card} className="card">
+          <EmptyState
+            icon="🌱"
+            message={`No new students in ${fmtMonth(month)} yet`}
+            action={latestWithStudents && (
+              <button style={S.btn("secondary")} onClick={() => setPicked(latestWithStudents.month)}>
+                See {fmtMonth(latestWithStudents.month)} ({latestWithStudents.students.length})
+              </button>
+            )}
+          />
+        </div>
+      ) : (
+        groups.map((g) => <NewStudentBatch key={g.key} name={g.name} students={g.students} showMoney={showMoney} />)
+      )}
+    </div>
   );
 }
 

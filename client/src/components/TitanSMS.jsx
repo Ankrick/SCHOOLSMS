@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import html2canvas from "html2canvas";
 import * as api from "../api";
-import { StudentsPage } from "./StudentsBatches";
+import { StudentsPage, NewStudentsPage } from "./StudentsBatches";
 import { MarkPaidModal, SlipViewer } from "./PaymentSlip";
+import { thisMonth } from "../dates";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────
 const BRAND = {
@@ -18,6 +19,8 @@ const BRAND = {
   greenLight: "#E8F5E9",
   orange: "#D4781A",
   orangeLight: "#FFF3E0",
+  yellow: "#B28704",
+  yellowLight: "#FFF8E1",
   red: "#C62828",
   redLight: "#FFEBEE",
   blue: "#1565C0",
@@ -31,10 +34,10 @@ const BRAND = {
 // OwnerSMS.jsx, picked in App.jsx. The server enforces this split as well
 // (server/middleware/roleGuard.js); this only decides what to render.
 //   finance  — students and batches (full edit), invoices and payment history.
-//   operator — the Students tab, read-only and without fees.
+//   operator — the Students tab, read-only and without fees, and monthly new-student counts.
 const TABS_BY_ROLE = {
   finance: ["Students", "Invoices", "Payment History"],
-  operator: ["Students"],
+  operator: ["Students", "New Students"],
 };
 
 // Roles whose data load includes invoices, payments and revenue. Everyone else would get
@@ -42,7 +45,7 @@ const TABS_BY_ROLE = {
 const CAN_SEE_FINANCE = ["owner", "finance"];
 
 const ICONS = {
-  Students: "🎓", Invoices: "🧾", "Payment History": "💳",
+  Students: "🎓", "New Students": "🌱", Invoices: "🧾", "Payment History": "💳",
   search: "🔍", add: "➕", edit: "✏️", trash: "🗑️", check: "✅", x: "❌",
   warning: "⚠️", clock: "🕐", money: "💰", star: "⭐", fire: "🔥",
   send: "📤", eye: "👁️", download: "⬇️", filter: "🔽",
@@ -53,7 +56,6 @@ const fmtMMK = (n) => new Intl.NumberFormat("en-US").format(n) + " MMK";
 const fmtDate = (d) =>
   d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const fmtDateInput = (d) => (d ? new Date(d).toISOString().split("T")[0] : "");
-const today = () => new Date().toISOString().split("T")[0];
 const addOneMonth = (dateStr) => {
   const [year, month, day] = dateStr.split("-").map(Number);
   const nm = month === 12 ? 1 : month + 1;
@@ -170,6 +172,7 @@ function Badge({ stage }) {
     Overdue: [BRAND.orange, BRAND.orangeLight],
     // The collection timeline for unpaid fees (see server/utils/billing.js unpaidStatus).
     Upcoming: [BRAND.grey, BRAND.greyLight],
+    Due: [BRAND.yellow, BRAND.yellowLight],
     Call: [BRAND.red, BRAND.redLight],
     // Students
     Active: [BRAND.green, BRAND.greenLight],
@@ -197,7 +200,6 @@ function EmptyState({ icon, message, action }) {
 // their billing day, so any month — this one, last one, next March — can simply be asked
 // for. That is what makes the totals a forecast rather than a record of whatever someone
 // remembered to create, and it is why there is no "generate" button any more.
-const thisMonth = () => new Date().toISOString().split("T")[0].slice(0, 7);
 
 const shiftMonth = (mk, n) => {
   const [y, m] = mk.split("-").map(Number);
@@ -258,8 +260,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     setStatusSort((prev) => (prev === null ? "outstanding" : prev === "outstanding" ? "paid" : null));
   }
 
-  // Most urgent first: who to phone, who is late, then the rest.
-  const STATUS_PRIORITY = { Call: 0, Overdue: 1, Upcoming: 2, Unpaid: 2, Paid: 3 };
+  // Most urgent first: who to phone, who is late, who is due now, then the rest.
+  const STATUS_PRIORITY = { Call: 0, Overdue: 1, Due: 2, Upcoming: 3, Unpaid: 3, Paid: 4 };
 
   const filtered = dues
     .filter((due) => {
@@ -400,7 +402,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
         <select style={{ ...S.select, width: "auto", minWidth: 140 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All Status</option>
           <option value="outstanding">Left to pay</option>
-          <option value="Overdue">Overdue</option>
+          <option value="Due">Due (today to 2 days late)</option>
+          <option value="Overdue">Overdue (3–6 days late)</option>
           <option value="Call">Call (7+ days late)</option>
           <option value="Upcoming">Upcoming</option>
           <option value="Paid">Paid</option>
@@ -1180,6 +1183,7 @@ export default function TitanSMS({ onLogout }) {
         readOnly={!canSeeFinance}
       />
     ),
+    "New Students": <NewStudentsPage />,
     Invoices: (
       <InvoicesPage
         students={data.students}

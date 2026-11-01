@@ -129,7 +129,7 @@ exports.getDues = async (req, res, next) => {
         collected,
         outstanding: expected - collected,
         studentsLeft: new Set(unpaid.map((d) => d.studentId)).size,
-        // Past due, whether merely late or already needing a call.
+        // Three or more days late, whether merely overdue or already needing a call.
         overdue: dues.filter((d) => d.status === "Overdue" || d.status === "Call").length,
         call: dues.filter((d) => d.status === "Call").length,
       },

@@ -8,6 +8,7 @@ const { requireRole, MANAGE_RECORDS } = require("../middleware/roleGuard");
 const canManage = requireRole(...MANAGE_RECORDS);
 
 router.get("/", ctrl.getStudents);
+router.get("/new-per-month", requireRole("owner", "operator"), ctrl.getNewStudentsPerMonth);
 router.post("/", canManage, ctrl.createStudent);
 router.put("/:id", canManage, ctrl.updateStudent);
 router.delete("/:id", canManage, ctrl.deleteStudent);

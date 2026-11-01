@@ -10,6 +10,7 @@
 // list response, so they are fetched per record when someone opens one.
 
 import { useState, useRef, useEffect } from "react";
+import { today } from "../dates";
 
 const BRAND = {
   crimson: "#8B1A1A",
@@ -83,7 +84,6 @@ const S = {
 const fmtMMK = (n) => new Intl.NumberFormat("en-US").format(n) + " MMK";
 export const fmtSlipDate = (d) =>
   d ? new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
-const today = () => new Date().toISOString().split("T")[0];
 
 // ─── Attaching an image ──────────────────────────────────────────
 const MAX_FILE_BYTES = 12 * 1024 * 1024;

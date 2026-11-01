@@ -3,7 +3,7 @@ const Batch = require("../models/Batch");
 const Settings = require("../models/Settings");
 const PaymentHistory = require("../models/PaymentHistory");
 const { readSlipPayload, withoutSlipImage } = require("../utils/slip");
-const { billingAnchor, normalizePlan, chargeAt } = require("../utils/billing");
+const { billingAnchor, normalizePlan, chargeAt, addMonths, currentMonthKey, feeFor, planOf } = require("../utils/billing");
 
 // All an operator gets of a student: who they are, which batch, and how to reach them.
 // Status rides along so the page can still filter to active students. Fees, payment plans,
@@ -16,6 +16,70 @@ exports.getStudents = async (req, res, next) => {
     if (req.user.role === "operator") query.select(OPERATOR_STUDENT_FIELDS);
     const students = await query;
     res.json(students);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/students/new-per-month — who enrolled each month, newest month first, and which
+// batch they joined. Everyone who enrolled counts, whatever their status is now; a student
+// who was deleted is gone from the records and so from these lists. Months with no one new
+// stay in the list with an empty roster.
+//
+// Money is the owner's alone, so it is only ever read and worked out for the owner. Each
+// student then carries either `monthlyFee` or, on an installment plan, `installments`
+// ({ count, total }) — an installment plan has no monthly figure.
+exports.getNewStudentsPerMonth = async (req, res, next) => {
+  try {
+    const withMoney = req.user.role === "owner";
+    const [students, batches, settings] = await Promise.all([
+      Student.find()
+        .select(`name nameBurmese batchId status enrolledDate${withMoney ? " customFee paymentPlan" : ""}`)
+        .sort({ enrolledDate: -1, name: 1 })
+        .lean(),
+      Batch.find().select(withMoney ? "name fee" : "name").lean(),
+      withMoney ? Settings.findOne().lean() : null,
+    ]);
+    const batchById = Object.fromEntries(batches.map((b) => [String(b._id), b]));
+
+    const byMonth = {};
+    for (const student of students) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])/.test(student.enrolledDate || "")) continue;
+      const batch = batchById[student.batchId];
+      const entry = {
+        id: String(student._id),
+        name: student.name,
+        nameBurmese: student.nameBurmese || "",
+        batchId: batch ? student.batchId : "",
+        batchName: batch ? batch.name : "",
+        status: student.status,
+        enrolledDate: student.enrolledDate,
+      };
+      if (withMoney) {
+        const plan = planOf(student);
+        if (plan.kind === "installments") {
+          entry.installments = {
+            count: plan.installments.length,
+            total: plan.installments.reduce((sum, i) => sum + i.amount, 0),
+          };
+        } else {
+          entry.monthlyFee = feeFor(student, batch, settings);
+        }
+      }
+      const month = student.enrolledDate.slice(0, 7);
+      (byMonth[month] = byMonth[month] || []).push(entry);
+    }
+
+    const found = Object.keys(byMonth).sort();
+    if (found.length === 0) return res.json([]);
+
+    const now = currentMonthKey();
+    const last = found[found.length - 1] > now ? found[found.length - 1] : now;
+    const months = [];
+    for (let month = found[0]; month <= last; month = addMonths(`${month}-01`, 1).slice(0, 7)) {
+      months.push({ month, students: byMonth[month] || [] });
+    }
+    res.json(months.reverse());
   } catch (err) {
     next(err);
   }

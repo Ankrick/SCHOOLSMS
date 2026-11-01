@@ -4,8 +4,9 @@
 //   finance  — invoices, payment history, and students and batches (fees included): add,
 //              edit and delete. Reads settings but cannot change them.
 //   operator — read-only students and batches, cut down to name, batch, parent phone and
-//              student Telegram. No fees and no billing records — the student and batch
-//              controllers strip those fields for this role.
+//              student Telegram, plus who joined each month and which batch. No fees and
+//              no billing records — the student and batch controllers strip those fields
+//              for this role.
 //
 // Hiding tabs in the UI is not enough, since the API can be called directly, so the
 // restriction is enforced here.

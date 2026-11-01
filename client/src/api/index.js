@@ -58,6 +58,9 @@ export const deleteStudent = (id) => api.delete(`/students/${id}`).then(handle).
 export const addStrike = (id) => api.patch(`/students/${id}/strikes/add`).then(handle).catch(err);
 export const removeStrike = (id) =>
   api.patch(`/students/${id}/strikes/remove`).then(handle).catch(err);
+// Owner and operator. [{ month: "2026-10", students: [...] }], newest month first. Only the
+// owner's response carries money (monthlyFee or installments on each student).
+export const getNewStudentsPerMonth = () => api.get("/students/new-per-month").then(handle).catch(err);
 
 // Teachers
 export const getTeachers = () => api.get("/teachers").then(handle).catch(err);
