@@ -22,6 +22,9 @@ const paymentHistorySchema = new mongoose.Schema(
     nameBurmese: { type: String, default: "" },
     batchId: { type: String, default: "" },
     batchName: { type: String, default: "" },
+    // Which of the student's enrollments (batches) this pays for. Unset on payments recorded
+    // before enrollments; utils/enrollments.js works those out.
+    enrollmentId: { type: String, default: undefined },
     invoiceNumber: { type: String, default: "" },
     amount: { type: Number, required: true },
     paidDate: { type: String, required: true },

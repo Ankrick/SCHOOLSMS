@@ -3,7 +3,7 @@ import html2canvas from "html2canvas";
 import * as api from "../api";
 import { StudentsPage, NewStudentsPage } from "./StudentsBatches";
 import { MarkPaidModal, SlipViewer } from "./PaymentSlip";
-import { monthlyFeeOf } from "../paymentPlan";
+import { monthlyFeeOf, billedEnrollments } from "../paymentPlan";
 import { today, thisMonth } from "../dates";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────
@@ -287,19 +287,19 @@ function Dashboard({ data }) {
   const { students, teachers = [], dues = [], paymentHistory = [], leads, batches } = data;
   const activeStudents = students.filter((s) => s.status === "Active").length;
   const activeTeachers = teachers.filter((t) => t.status === "Active");
-  const mrr = students
-    .filter((s) => s.status === "Active")
-    .reduce((sum, s) => {
-      const batch = batches.find((b) => b.id === s.batchId);
-      return sum + monthlyFeeOf(s, batch);
-    }, 0);
+  // Each batch a student attends is its own fee.
+  const billed = billedEnrollments(students);
+  const mrr = billed.reduce((sum, { enrollment: e }) => {
+    const batch = batches.find((b) => b.id === e.batchId);
+    return sum + monthlyFeeOf(e, batch);
+  }, 0);
   const teacherSalaryCost = activeTeachers.reduce((sum, t) => sum + (t.monthlySalary || 0), 0);
   const commissionCost = Math.round(
     batches.reduce((sum, b) => {
       if (!b.commissionPercent) return sum;
-      const batchRevenue = students
-        .filter((s) => s.status === "Active" && s.batchId === b.id)
-        .reduce((rev, s) => rev + monthlyFeeOf(s, b), 0);
+      const batchRevenue = billed
+        .filter(({ enrollment: e }) => e.batchId === b.id)
+        .reduce((rev, { enrollment: e }) => rev + monthlyFeeOf(e, b), 0);
       const teacher = teachers.find((t) => t.id === b.teacherId);
       const profitAfterSalary = batchRevenue - (teacher ? teacher.monthlySalary || 0 : 0);
       return sum + Math.max(0, profitAfterSalary) * (b.commissionPercent / 100);
@@ -381,7 +381,7 @@ function Dashboard({ data }) {
         <div style={D.panel}>
           <div style={D.panelTitle}>Batch Capacity</div>
           {batches.map((b) => {
-            const enrolled = students.filter((s) => s.batchId === b.id && s.status === "Active").length;
+            const enrolled = billed.filter(({ enrollment: e }) => e.batchId === b.id).length;
             const pct = Math.round((enrolled / b.maxStudents) * 100);
             return (
               <div key={b.id} style={{ marginBottom: 14 }}>
@@ -631,6 +631,29 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
   const [lastDeleted, setLastDeleted] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // An optional due-date window inside the months on screen, e.g. "what can I collect between
+  // the 10th and the 20th". Picking dates loads the months they fall in; moving to months that
+  // no longer hold them clears it.
+  const [dueFrom, setDueFrom] = useState("");
+  const [dueTo, setDueTo] = useState("");
+  const hasDueWindow = !!(dueFrom || dueTo);
+
+  function setDueWindow(from, to) {
+    setDueFrom(from);
+    setDueTo(to);
+    if (from || to) {
+      setFromMonth((from || to).slice(0, 7));
+      setToMonth((to || from).slice(0, 7));
+    }
+  }
+
+  useEffect(() => {
+    if ((dueFrom && dueFrom.slice(0, 7) < fromMonth) || (dueTo && dueTo.slice(0, 7) > toMonth)) {
+      setDueFrom("");
+      setDueTo("");
+    }
+  }, [fromMonth, toMonth]);
+
   const singleMonth = fromMonth === toMonth;
 
   // The months on screen are the only thing fetched, so stepping to next March costs one
@@ -651,7 +674,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     return () => { live = false; };
   }, [fromMonth, toMonth, reloadKey]);
 
-  useEffect(() => setSelected(new Set()), [search, filterStatus, filterBatch, fromMonth, toMonth]);
+  useEffect(() => setSelected(new Set()), [search, filterStatus, filterBatch, fromMonth, toMonth, dueFrom, dueTo]);
 
   const studentsById = useMemo(
     () => Object.fromEntries(students.map((s) => [s.id, s])),
@@ -668,6 +691,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
   const filtered = dues
     .filter((due) => {
       if (filterBatch !== "all" && due.batchId !== filterBatch) return false;
+      if (dueFrom && due.dueDate < dueFrom) return false;
+      if (dueTo && due.dueDate > dueTo) return false;
       if (filterStatus === "outstanding" && due.status === "Paid") return false;
       if (filterStatus !== "all" && filterStatus !== "outstanding" && due.status !== filterStatus) return false;
       if (search) {
@@ -699,7 +724,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     expected: filtered.reduce((sum, d) => sum + d.amount, 0),
     collected: filtered.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
   };
-  const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all";
+  const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all" || hasDueWindow;
   const view = isFiltered
     ? {
         expected: shown.expected,
@@ -746,6 +771,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
       for (const due of target) {
         const { payment: saved } = await api.payDue({
           studentId: due.studentId,
+          enrollmentId: due.enrollmentId,
           periodStart: due.periodStart,
           ...payment,
         });
@@ -773,7 +799,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
       : `${toDelete.length} invoices totalling ${fmtMMK(toDelete.reduce((sum, d) => sum + d.amount, 0))}`;
     if (!confirm(`Delete ${what}? It will no longer be billed. You can undo this straight after.`)) return;
 
-    const charges = toDelete.map((d) => ({ studentId: d.studentId, periodStart: d.periodStart }));
+    const charges = toDelete.map((d) => ({ studentId: d.studentId, enrollmentId: d.enrollmentId, periodStart: d.periodStart }));
     setDeleting(true);
     try {
       const { students: updated } = await api.removeDues(charges);
@@ -803,9 +829,19 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     }
   }
 
-  const rangeLabel = singleMonth
+  const dueWindowLabel = dueFrom && dueTo
+    ? dueFrom === dueTo ? fmtDate(dueFrom) : `${fmtDate(dueFrom)} – ${fmtDate(dueTo)}`
+    : dueFrom ? `${fmtDate(dueFrom)} onwards` : `up to ${fmtDate(dueTo)}`;
+  const rangeLabel = hasDueWindow
+    ? `fees due ${dueWindowLabel}`
+    : singleMonth
     ? monthLabel(fromMonth)
     : `${monthLabel(fromMonth)} – ${monthLabel(toMonth)}`;
+  const plusDays = (dateStr, n) => {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d + n)).toISOString().split("T")[0];
+  };
+  const owingInWindow = filtered.filter((d) => d.status !== "Paid");
 
   return (
     <div>
@@ -896,6 +932,40 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
           )}
         </div>
       </div>
+
+      {/* Due-date window: how much can be collected between two dates. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: -8, marginBottom: 16 }} className="date-filter-row">
+        <span style={{ fontSize: 12, color: BRAND.grey, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Due between</span>
+        <input
+          style={{ ...S.input, width: 150, fontSize: 13 }}
+          type="date"
+          value={dueFrom}
+          // A start past the end pulls the end along, as the month pickers do.
+          onChange={(e) => setDueWindow(e.target.value, dueTo && e.target.value > dueTo ? e.target.value : dueTo)}
+          title="Due on or after"
+        />
+        <span style={{ fontSize: 12, color: BRAND.grey }}>–</span>
+        <input
+          style={{ ...S.input, width: 150, fontSize: 13 }}
+          type="date"
+          value={dueTo}
+          onChange={(e) => setDueWindow(dueFrom && e.target.value && e.target.value < dueFrom ? e.target.value : dueFrom, e.target.value)}
+          title="Due on or before"
+        />
+        <button style={S.btn("small")} onClick={() => setDueWindow(today(), today())}>Today</button>
+        <button style={S.btn("small")} onClick={() => setDueWindow(today(), plusDays(today(), 6))}>Next 7 days</button>
+        {hasDueWindow && (
+          <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => setDueWindow("", "")} title="Clear the dates">✕ Clear</button>
+        )}
+      </div>
+
+      {hasDueWindow && (
+        <div style={{ padding: "12px 16px", background: BRAND.orangeLight, border: `1px solid ${BRAND.orange}33`, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>
+          <strong>{fmtMMK(view.outstanding)}</strong> still to collect for fees due {dueWindowLabel}
+          {" "}— {owingInWindow.length} fee{owingInWindow.length === 1 ? "" : "s"} from {view.studentsLeft} student{view.studentsLeft === 1 ? "" : "s"}.
+          <span style={{ color: BRAND.grey }}> {fmtMMK(view.collected)} of {fmtMMK(view.expected)} already collected.</span>
+        </div>
+      )}
 
       {selected.size > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", background: BRAND.blueLight, border: `1px solid ${BRAND.blue}22`, borderRadius: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -1788,18 +1858,19 @@ function planPeriods(student, batch, anchor) {
   return out;
 }
 
-function buildFeePeriods(student, batch, paymentHistory) {
-  const anchor = student.billingStartDate || student.enrolledDate;
+// One enrollment's periods: a student in two batches is tracked once per batch.
+function buildFeePeriods(student, enrollment, batch, paymentHistory) {
+  const anchor = enrollment.billingStartDate || enrollment.enrolledDate;
   if (!anchor) return [];
   const todayStr = today();
 
   const paidByStart = new Map();
   for (const ph of paymentHistory) {
-    if (ph.studentId === student.id && ph.periodStart) paidByStart.set(ph.periodStart, ph);
+    if (ph.studentId === student.id && ph.enrollmentId === enrollment.id && ph.periodStart) paidByStart.set(ph.periodStart, ph);
   }
   const periods = [];
-  const removed = new Set(student.removedCharges || []);
-  for (const { periodStart, periodEnd, label, amount } of planPeriods(student, batch, anchor)) {
+  const removed = new Set(enrollment.removedCharges || []);
+  for (const { periodStart, periodEnd, label, amount } of planPeriods(enrollment, batch, anchor)) {
     // Invoices the owner deleted are not owed, unless a payment was recorded before deletion.
     if (removed.has(periodStart) && !paidByStart.has(periodStart)) continue;
     const mk = periodStart.slice(0, 7);
@@ -1823,21 +1894,30 @@ function FeeTrackerPage({ students, batches, paymentHistory }) {
   const [filterBatch, setFilterBatch] = useState("all");
   const [filterStatus, setFilterStatus] = useState("Active");
 
-  const filtered = students.filter((s) => {
-    if (filterBatch !== "all" && s.batchId !== filterBatch) return false;
-    if (filterStatus !== "all" && s.status !== filterStatus) return false;
-    if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  // A row per batch a student attends; a batch they have left reads as inactive.
+  const filtered = students
+    .flatMap((s) => (s.enrollments || []).map((e) => ({
+      student: s,
+      enrollment: e,
+      status: s.status === "Active" && e.status === "Inactive" ? "Inactive" : s.status,
+    })))
+    .filter(({ student: s, enrollment: e, status }) => {
+      if (filterBatch !== "all" && e.batchId !== filterBatch) return false;
+      if (filterStatus !== "all" && status !== filterStatus) return false;
+      if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    });
 
-  const rows = filtered.map((s) => {
-    const batch = batches.find((b) => b.id === s.batchId);
-    const periods = buildFeePeriods(s, batch, paymentHistory);
+  const rows = filtered.map(({ student: s, enrollment: e, status }) => {
+    const batch = batches.find((b) => b.id === e.batchId);
+    const periods = buildFeePeriods(s, e, batch, paymentHistory);
     const behind = periods.some((p) => p.status === "unpaid" || p.status === "overdue");
-    return { student: s, batch, periods, behind };
+    return { student: s, enrollment: e, status, batch, periods, behind };
   });
 
-  const behindCount = rows.filter((r) => r.behind).length;
+  // Counted in students, not rows — a student in two batches has two rows.
+  const trackedCount = new Set(rows.map((r) => r.student.id)).size;
+  const behindCount = new Set(rows.filter((r) => r.behind).map((r) => r.student.id)).size;
 
   return (
     <div>
@@ -1846,7 +1926,7 @@ function FeeTrackerPage({ students, batches, paymentHistory }) {
 
       <div style={S.statsRow}>
         <div style={S.statCard(BRAND.crimson)}>
-          <div style={S.statNum}>{rows.length}</div>
+          <div style={S.statNum}>{trackedCount}</div>
           <div style={S.statLabel}>Students Tracked</div>
         </div>
         <div style={S.statCard(behindCount > 0 ? BRAND.red : BRAND.green)}>
@@ -1885,8 +1965,8 @@ function FeeTrackerPage({ students, batches, paymentHistory }) {
           <EmptyState icon="🗓️" message="No students match this filter" />
         ) : (
           <div>
-            {rows.map(({ student: s, batch, periods }, idx) => (
-              <div key={s.id} style={{ padding: "16px 4px", borderBottom: idx < rows.length - 1 ? `1px solid ${BRAND.border}` : "none" }}>
+            {rows.map(({ student: s, enrollment: e, status, batch, periods }, idx) => (
+              <div key={`${s.id}:${e.id}`} style={{ padding: "16px 4px", borderBottom: idx < rows.length - 1 ? `1px solid ${BRAND.border}` : "none" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 15 }}>
@@ -1898,7 +1978,7 @@ function FeeTrackerPage({ students, batches, paymentHistory }) {
                       {batch?.examSession && <span>🎯 {batch.examSession}</span>}
                     </div>
                   </div>
-                  <Badge stage={s.status} />
+                  <Badge stage={status} />
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {periods.length === 0 ? (
@@ -2272,22 +2352,31 @@ export default function OwnerSMS({ onLogout }) {
   }, []);
 
   // ── Student handlers ──
-  async function handleSaveStudent(studentData) {
-    if (studentData.id) {
-      const updated = await api.updateStudent(studentData.id, studentData);
-      setData((prev) => ({ ...prev, students: prev.students.map((s) => s.id === studentData.id ? updated : s) }));
-      return updated;
-    } else {
-      // Registering also records the first payment, so both come back together and the
-      // form uses the payment to draw the receipt.
-      const { student, payment } = await api.createStudent(studentData);
-      setData((prev) => ({
-        ...prev,
-        students: [...prev.students, student],
-        paymentHistory: [payment, ...prev.paymentHistory],
-      }));
-      return { ...student, payment };
+  // Saving returns the student and the first-payment receipts of any batch added (or of the
+  // registration being corrected), which the form shows straight away.
+  async function handleSaveStudent(studentData, mode) {
+    const result = mode === "correct"
+      ? await api.correctRegistration(studentData.id, studentData)
+      : studentData.id
+      ? await api.updateStudent(studentData.id, studentData)
+      : await api.createStudent(studentData);
+    const { student, payments = [] } = result;
+    setData((prev) => ({
+      ...prev,
+      students: prev.students.some((s) => s.id === student.id)
+        ? prev.students.map((s) => (s.id === student.id ? student : s))
+        : [...prev.students, student],
+      paymentHistory: [
+        ...payments,
+        // A corrected receipt replaces the old copy; one dropped in the correction goes.
+        ...prev.paymentHistory.filter((ph) => !payments.some((p) => p.id === ph.id) && !(studentData.paymentIds || []).includes(ph.id)),
+      ],
+    }));
+    // A corrected name is written onto every receipt the student already has.
+    if (mode !== "create") {
+      api.getPaymentHistory().then((paymentHistory) => setData((prev) => ({ ...prev, paymentHistory }))).catch(() => {});
     }
+    return result;
   }
 
   async function handleDeleteStudent(id) {
@@ -2453,11 +2542,10 @@ export default function OwnerSMS({ onLogout }) {
   // Owner-only: this is passed to StudentsPage only here, never from TitanSMS, which is what
   // keeps finance and operator from seeing it regardless of what those roles have loaded.
   const revenueByBatch = {};
-  for (const s of data.students) {
-    if (s.status !== "Active") continue;
-    const batch = data.batches.find((b) => b.id === s.batchId);
+  for (const { enrollment: e } of billedEnrollments(data.students)) {
+    const batch = data.batches.find((b) => b.id === e.batchId);
     if (!batch) continue;
-    revenueByBatch[batch.id] = (revenueByBatch[batch.id] || 0) + monthlyFeeOf(s, batch);
+    revenueByBatch[batch.id] = (revenueByBatch[batch.id] || 0) + monthlyFeeOf(e, batch);
   }
 
   const pages = {

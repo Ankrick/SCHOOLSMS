@@ -223,16 +223,19 @@ function periodIndexesInMonth(student, batch, mk) {
   return cutoff && mk > cutoff ? [] : [index];
 }
 
-// The charge a student carries for one period. `id` is synthetic and stable — a due has no
-// document of its own, so the student and the period it covers are its identity.
+// The charge an enrollment carries for one period. `id` is synthetic and stable — a due has
+// no document of its own, so the student, the enrollment and the period are its identity.
+// `student` is a billing subject (utils/enrollments.js billingSubject).
 function makeDue({ student, batch, settings, index }) {
   const charge = chargeAt(student, batch, settings, index);
   if (!charge) return null;
   const { periodStart, periodEnd, amount, label } = charge;
   const what = label || fmtShortDate(periodStart) + " – " + fmtShortDate(periodEnd);
+  const enrollmentId = student.enrollmentId || student.id;
   return {
-    id: `${student.id}:${periodStart}`,
+    id: `${student.id}:${enrollmentId}:${periodStart}`,
     studentId: student.id,
+    enrollmentId,
     studentName: student.name,
     nameBurmese: student.nameBurmese || "",
     studentEmail: student.email || "",

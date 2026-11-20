@@ -1,6 +1,7 @@
 const Lead = require("../models/Lead");
 const Student = require("../models/Student");
 const Batch = require("../models/Batch");
+const { studentJSON } = require("../utils/enrollments");
 
 const today = () => new Date().toISOString().split("T")[0];
 
@@ -56,7 +57,7 @@ exports.convertToStudent = async (req, res, next) => {
       name: lead.name,
       email: lead.email || "",
       phone: lead.phone || "",
-      batchId: firstBatch ? firstBatch.id : "",
+      enrollments: [{ batchId: firstBatch ? firstBatch.id : "", enrolledDate: today() }],
       subject: "Computer Science",
       status: "Active",
       strikes: 0,
@@ -73,7 +74,7 @@ exports.convertToStudent = async (req, res, next) => {
     lead.updatedAt = today();
     await lead.save();
 
-    res.json({ student, lead });
+    res.json({ student: studentJSON(student), lead });
   } catch (err) {
     next(err);
   }

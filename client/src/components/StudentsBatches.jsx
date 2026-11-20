@@ -105,7 +105,6 @@ const S = {
 
 // ─── HELPERS ─────────────────────────────────────────────────────
 const STRIKE_MAX = 3;
-const SUBJECTS = ["Computer Science", "ICT", "Mathematics", "Physics", "Biology", "Chemistry"];
 
 const fmtMMK = (n) => new Intl.NumberFormat("en-US").format(n) + " MMK";
 const fmtDate = (d) =>
@@ -177,11 +176,13 @@ function EmptyState({ icon, message, action }) {
 }
 
 // ─── STUDENT DETAIL CARD (inside the batch window) ───────────────
-function StudentDetailCard({ student, batch, readOnly, onEdit, onDelete, onAddStrike, onRemoveStrike }) {
+// One student as seen from one of their batches: the billing shown is that batch's, and any
+// other batches they attend are named underneath.
+function StudentDetailCard({ student, enrollment, batch, otherBatches, readOnly, onEdit, onDelete, onAddStrike, onRemoveStrike }) {
   // Exactly these rows, always shown in this order — a missing one reads "—" rather than
   // vanishing, so every card lines up and a gap is obvious. Everything else lives in Edit.
   // Read-only (operator) cards show contact details only; billing never reaches them.
-  const billing = student.billingStartDate || student.enrolledDate;
+  const billing = enrollment.billingStartDate || enrollment.enrolledDate;
   const rows = readOnly
     ? [
         ["Student Telegram", student.telegram],
@@ -191,16 +192,19 @@ function StudentDetailCard({ student, batch, readOnly, onEdit, onDelete, onAddSt
         ["Student Telegram", student.telegram],
         ["Guardian fb contact", student.invoiceContact],
         ["Billing Date", billing ? fmtDate(billing) : null],
-        ["Payment Plan", planSummary(student, batch)],
+        ["Payment Plan", planSummary(enrollment, batch)],
       ];
+  if (otherBatches.length) rows.push(["Also in", otherBatches.join(", ")]);
+  const left = enrollment.status === "Inactive";
 
   return (
-    <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 16, background: BRAND.white }}>
+    <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 16, background: BRAND.white, opacity: left ? 0.75 : 1 }}>
       <div style={{ ...S.flexBetween, gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{student.name}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-            <Badge stage={student.status} />
+            <Badge stage={left && student.status === "Active" ? "Inactive" : student.status} />
+            {left && student.status === "Active" && <span style={{ fontSize: 11, color: BRAND.grey }}>Left this batch</span>}
             {!readOnly && <Strikes count={student.strikes} />}
           </div>
         </div>
@@ -400,184 +404,362 @@ function planError(plan, anchor) {
 }
 
 // ─── FORMS ───────────────────────────────────────────────────────
-// Registering a student is also their first payment: the form asks for the KBZPay slip and
-// the date off it, the server records that fee against the student, and the receipt for it
-// is shown as soon as the student is saved. Editing an existing student asks for neither.
+// A student is their details plus the batches they attend. Joining a batch is also its first
+// payment, so the form asks for the KBZPay slip and the date off it whenever a batch is added
+// — at registration or later. That date is also the day they joined; it is not asked twice.
 //
-// receiptRenderer is optional: shells that can show payment documents pass one, and a newly
-// created student then gets a first-payment receipt.
-// lockedBatchId fixes the batch for a new student (added from that batch's window); it is
-// undefined when editing, where the batch stays selectable so students can be moved.
-function StudentForm({ student, batches, lockedBatchId, onSave, onClose, receiptRenderer }) {
-  const [form, setForm] = useState(
-    student || {
-      name: "", nameBurmese: "", email: "", phone: "", telegram: "",
-      batchId: lockedBatchId !== undefined ? lockedBatchId : batches[0]?.id || "",
+// After saving, the first-payment receipts are shown with "Edit details": correcting the
+// entry updates the student and those same receipts, which is what Payment History shows.
+//
+// receiptRenderer is optional: shells that can show payment documents pass one.
+
+let enrollmentSeq = 0;
+const newEnrollment = (batchId = "") => ({
+  key: `new-${++enrollmentSeq}`,
+  isNew: true,
+  batchId,
+  billingStartDate: "",
+  customFee: null,
+  paymentPlan: EMPTY_PLAN,
+  status: "Active",
+});
+const normName = (n) => (n || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+function formFrom(student, addBatchId) {
+  if (!student) {
+    return {
+      name: "", nameBurmese: "", telegram: "", invoiceContact: "", parentPhone: "", notes: "",
       subject: "Computer Science", status: "Active", strikes: 0,
-      customFee: null, enrolledDate: today(), billingStartDate: today(),
-      paymentPlan: EMPTY_PLAN,
-      invoiceContact: "", parentPhone: "", notes: "",
-    }
+      enrollments: [newEnrollment()],
+    };
+  }
+  const enrollments = (student.enrollments || []).map((e) => ({ ...e, key: e.id, isNew: false, paymentPlan: e.paymentPlan || EMPTY_PLAN }));
+  if (addBatchId !== undefined && !enrollments.some((e) => e.batchId === addBatchId)) enrollments.push(newEnrollment(addBatchId));
+  return { ...student, enrollments };
+}
+
+// What registration collects for one batch: its first month, or its first installment.
+function firstAmountOf(e, batches) {
+  const plan = e.paymentPlan || EMPTY_PLAN;
+  if (plan.kind === "installments") return Number(plan.installments?.[0]?.amount) || 0;
+  if (e.customFee != null) return e.customFee;
+  return batches.find((b) => b.id === e.batchId)?.fee ?? 0;
+}
+
+function EnrollmentCard({ enrollment: e, index, batches, takenBatchIds, anchor, onChange, onRemove, disabled }) {
+  const set = (k, v) => onChange({ ...e, [k]: v });
+  const batch = batches.find((b) => b.id === e.batchId);
+  const left = e.status === "Inactive";
+  return (
+    <div style={{ border: `1px solid ${e.isNew ? BRAND.gold : BRAND.border}`, borderRadius: 10, padding: 16, marginBottom: 12, background: left ? BRAND.greyLight : BRAND.white }}>
+      <div style={{ ...S.flexBetween, gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>
+          {e.isNew ? (index === 0 ? "Batch" : "New batch") : `Batch ${index + 1}`}
+          {!e.isNew && e.enrolledDate && <span style={{ fontWeight: 400, color: BRAND.grey }}> · joined {fmtDate(e.enrolledDate)}</span>}
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {!e.isNew && (
+            <select style={{ ...S.select, width: "auto", padding: "4px 8px", fontSize: 12 }} value={e.status} onChange={(ev) => set("status", ev.target.value)} disabled={disabled}>
+              <option value="Active">Attending</option>
+              <option value="Inactive">Left this batch</option>
+            </select>
+          )}
+          {onRemove && (
+            <button type="button" style={{ ...S.btn("small"), color: BRAND.red }} onClick={onRemove} disabled={disabled} title="Remove this batch">✕</button>
+          )}
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="preview-grid">
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Batch *</label>
+          <select style={S.select} value={e.batchId} onChange={(ev) => set("batchId", ev.target.value)} disabled={disabled}>
+            <option value="">— No batch —</option>
+            {batches.map((b) => (
+              <option key={b.id} value={b.id} disabled={b.id !== e.batchId && takenBatchIds.has(b.id)}>{b.name}</option>
+            ))}
+          </select>
+        </div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Billing date</label>
+          <input style={S.input} type="date" value={fmtDateInput(e.billingStartDate)} onChange={(ev) => set("billingStartDate", ev.target.value)} disabled={disabled} />
+          {e.isNew && !e.billingStartDate && (
+            <div style={{ fontSize: 11, color: BRAND.grey, marginTop: 4 }}>Leave empty to bill from the paid date.</div>
+          )}
+        </div>
+      </div>
+      {!left && (
+        <PaymentPlanFields
+          plan={e.paymentPlan || EMPTY_PLAN}
+          anchor={anchor}
+          customFee={e.customFee}
+          batchFee={batch?.fee ?? 0}
+          onPlanChange={(next) => set("paymentPlan", next)}
+          onFeeChange={(fee) => set("customFee", fee)}
+          disabled={disabled}
+        />
+      )}
+    </div>
   );
+}
+
+function StudentFormBody({ student, correcting, batches, allStudents, initialBatchId, addBatchId, onSave, onSaved, onClose, onSwitchToExisting }) {
+  const [form, setForm] = useState(() => {
+    const f = formFrom(student, addBatchId);
+    if (!student && initialBatchId !== undefined) f.enrollments[0].batchId = initialBatchId;
+    else if (!student) f.enrollments[0].batchId = batches[0]?.id || "";
+    return f;
+  });
   const [saving, setSaving] = useState(false);
-  const [receiptData, setReceiptData] = useState(null);
+  const [error, setError] = useState(null);
+  const [payment, setPayment] = useState(() => (correcting ? { ...emptySlipPayment(), paidDate: correcting.paidDate } : emptySlipPayment()));
   const isNew = !student;
-  const [firstPayment, setFirstPayment] = useState(emptySlipPayment);
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
-  const batchFee = batches.find((b) => b.id === form.batchId)?.fee ?? 0;
-  const plan = form.paymentPlan || EMPTY_PLAN;
-  const anchor = fmtDateInput(form.billingStartDate || form.enrolledDate);
-  const isInstallments = plan.kind === "installments";
-  // What registration collects: the first month, or the first installment.
-  const firstAmount = isInstallments
-    ? Number(plan.installments?.[0]?.amount) || 0
-    : form.customFee != null ? form.customFee : batchFee;
+  // A billing date left empty at registration was saved as the paid date. Correcting the paid
+  // date moves those billing dates with it; one chosen on purpose stays where it is.
+  function changePayment(next) {
+    if (correcting && next.paidDate && next.paidDate !== payment.paidDate) {
+      setForm((p) => ({
+        ...p,
+        enrollments: p.enrollments.map((e) =>
+          correcting.enrollmentIds.includes(e.id) && fmtDateInput(e.billingStartDate) === payment.paidDate
+            ? { ...e, billingStartDate: next.paidDate }
+            : e
+        ),
+      }));
+    }
+    setPayment(next);
+  }
+  const setEnrollment = (key, next) => setForm((p) => ({ ...p, enrollments: p.enrollments.map((e) => (e.key === key ? next : e)) }));
+  const removeEnrollment = (key) => setForm((p) => ({ ...p, enrollments: p.enrollments.filter((e) => e.key !== key) }));
+  const addEnrollment = () => {
+    const taken = new Set(form.enrollments.map((e) => e.batchId));
+    setForm((p) => ({ ...p, enrollments: [...p.enrollments, newEnrollment(batches.find((b) => !taken.has(b.id))?.id || "")] }));
+  };
+
+  // A new batch, or the batches whose receipts are being corrected, are paid for here.
+  const paying = form.enrollments.filter((e) => e.isNew || (correcting && correcting.enrollmentIds.includes(e.id)));
+  const needsPayment = paying.length > 0;
+  const paymentReady = correcting ? !!payment.paidDate : isSlipComplete(payment);
+  const firstTotal = paying.reduce((sum, e) => sum + firstAmountOf(e, batches), 0);
+  const anchorOf = (e) => fmtDateInput(e.billingStartDate) || (e.isNew ? payment.paidDate : fmtDateInput(e.enrolledDate)) || today();
+
+  // Typing the name of someone already registered offers their record instead of a new one.
+  const sameName = isNew && normName(form.name).length > 1
+    ? (allStudents || []).filter((s) => normName(s.name) === normName(form.name))
+    : [];
+  const batchName = (id) => batches.find((b) => b.id === id)?.name || "No batch";
 
   async function handleSave() {
-    if (!form.name.trim()) return alert("Name is required");
-    const badPlan = planError(plan, anchor);
-    if (badPlan) return alert(badPlan);
-    if (isNew && !isSlipComplete(firstPayment)) {
-      return alert("Enter the paid date and attach the KBZPay slip for the first payment.");
+    setError(null);
+    if (!form.name.trim()) return setError("Enter the student's name.");
+    if (form.enrollments.length === 0) return setError("Add at least one batch.");
+    const ids = form.enrollments.map((e) => e.batchId);
+    if (new Set(ids).size !== ids.length) return setError("The same batch is listed twice.");
+    for (const e of form.enrollments) {
+      const bad = e.status !== "Inactive" && planError(e.paymentPlan || EMPTY_PLAN, anchorOf(e));
+      if (bad) return setError(`${batchName(e.batchId)}: ${bad}`);
     }
+    if (needsPayment && !paymentReady) {
+      return setError(correcting ? "Enter the paid date from the slip." : "Enter the paid date and attach the KBZPay slip for the first payment.");
+    }
+
     setSaving(true);
     try {
-      // Only the chosen kind's details are sent; the first installment always sits on the
-      // billing date.
-      const paymentPlan = isInstallments
-        ? { kind: "installments", months: null, installments: plan.installments.map((inst, i) => ({ amount: Number(inst.amount), dueDate: i === 0 ? anchor : inst.dueDate })) }
-        : { kind: "monthly", months: plan.months ?? null, installments: [] };
-      const payload = { ...form, paymentPlan };
-      const saved = await onSave(
-        isNew
-          ? {
-              ...payload,
-              firstPayment: {
-                paidDate: firstPayment.paidDate,
-                slip: { image: firstPayment.image, filename: firstPayment.filename },
-              },
-            }
-          : payload
-      );
-      // The receipt is drawn from the payment the server actually recorded, so what the
-      // student is handed matches the books exactly — amount, period and reference.
-      if (isNew && saved && saved.payment && receiptRenderer) {
-        setReceiptData(saved.payment);
-      } else {
-        onClose();
+      const enrollments = form.enrollments.map((e) => {
+        const plan = e.paymentPlan || EMPTY_PLAN;
+        const anchor = anchorOf(e);
+        // Only the chosen kind's details are sent; the first installment always sits on the
+        // billing date.
+        const paymentPlan = plan.kind === "installments"
+          ? { kind: "installments", months: null, installments: plan.installments.map((inst, i) => ({ amount: Number(inst.amount), dueDate: i === 0 ? anchor : inst.dueDate })) }
+          : { kind: "monthly", months: plan.months ?? null, installments: [] };
+        return {
+          id: e.isNew ? undefined : e.id,
+          batchId: e.batchId,
+          billingStartDate: e.billingStartDate || "",
+          customFee: e.customFee,
+          paymentPlan,
+          status: e.status,
+        };
+      });
+      const { enrollments: _drop, key, ...profile } = form;
+      const payload = { ...profile, enrollments };
+      if (needsPayment) {
+        payload.firstPayment = {
+          paidDate: payment.paidDate,
+          ...(payment.image ? { slip: { image: payment.image, filename: payment.filename } } : {}),
+        };
       }
+      if (correcting) payload.paymentIds = correcting.paymentIds;
+      const saved = await onSave(payload, correcting ? "correct" : isNew ? "create" : "update");
+      onSaved(saved);
     } catch (err) {
-      alert(err.message);
-    } finally {
+      setError(err.message);
       setSaving(false);
     }
   }
 
-  if (receiptData && receiptRenderer) {
+  const takenBatchIds = new Set(form.enrollments.map((e) => e.batchId).filter(Boolean));
+  const title = correcting ? "Correct registration" : isNew ? "Add Student" : "Edit Student";
+
+  return (
+    <Modal title={title} onClose={onClose} contentStyle={{ maxWidth: 640 }}>
+      {correcting && (
+        <div style={{ ...S.card, background: BRAND.cream, padding: "10px 14px", fontSize: 13, marginBottom: 16 }}>
+          Fix anything entered wrongly. Saving updates the student and the receipt — Payment History shows the corrected one.
+        </div>
+      )}
+
+      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Student</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="preview-grid">
+        <div style={S.formGroup}><label style={S.formLabel}>Full Name (English) *</label><input style={S.input} value={form.name} onChange={(e) => set("name", e.target.value)} autoFocus={isNew} /></div>
+        <div style={S.formGroup}><label style={S.formLabel}>Burmese Name</label><input style={S.input} value={form.nameBurmese || ""} onChange={(e) => set("nameBurmese", e.target.value)} /></div>
+      </div>
+      {sameName.length > 0 && (
+        <div style={{ ...S.card, background: BRAND.blueLight, borderColor: `${BRAND.blue}33`, padding: "10px 14px", fontSize: 13, marginTop: -6, marginBottom: 16 }}>
+          {sameName.map((s) => (
+            <div key={s.id} style={{ ...S.flexBetween, gap: 8, flexWrap: "wrap" }}>
+              <span>
+                <strong>{s.name}</strong> is already a student — {(s.enrollments || []).map((e) => batchName(e.batchId)).join(", ")}
+                {s.invoiceContact ? ` · contact ${s.invoiceContact}` : ""}
+              </span>
+              <button type="button" style={S.btn("small")} onClick={() => onSwitchToExisting(s, form.enrollments[0]?.batchId)}>
+                Add the batch to this student
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="preview-grid">
+        <div style={S.formGroup}><label style={S.formLabel}>Telegram</label><input style={S.input} value={form.telegram || ""} onChange={(e) => set("telegram", e.target.value)} placeholder="@username" /></div>
+        <div style={S.formGroup}>
+          <label style={S.formLabel}>Guardian fb contact</label>
+          <input style={S.input} value={form.invoiceContact || ""} onChange={(e) => set("invoiceContact", e.target.value)} placeholder="Who finance sends the invoice to" />
+        </div>
+        <div style={S.formGroup}><label style={S.formLabel}>Parent Phone</label><input style={S.input} value={form.parentPhone || ""} onChange={(e) => set("parentPhone", e.target.value)} /></div>
+        {!isNew && !correcting && (
+          <div style={S.formGroup}>
+            <label style={S.formLabel}>Status</label>
+            <select style={S.select} value={form.status} onChange={(e) => set("status", e.target.value)}>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+              <option value="Expelled">Expelled</option>
+            </select>
+          </div>
+        )}
+      </div>
+      <div style={S.formGroup}><label style={S.formLabel}>Notes</label><textarea style={{ ...S.input, height: 52, resize: "vertical" }} value={form.notes || ""} onChange={(e) => set("notes", e.target.value)} /></div>
+
+      <div style={{ ...S.flexBetween, marginTop: 8, marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>Batches</div>
+        <button type="button" style={S.btn("small")} onClick={addEnrollment} disabled={saving}>➕ Add another batch</button>
+      </div>
+      {form.enrollments.map((e, i) => (
+        <EnrollmentCard
+          key={e.key}
+          enrollment={e}
+          index={i}
+          batches={batches}
+          takenBatchIds={takenBatchIds}
+          anchor={anchorOf(e)}
+          onChange={(next) => setEnrollment(e.key, next)}
+          // A batch with payments can only be left; one not yet saved can simply be taken off.
+          onRemove={e.isNew && form.enrollments.length > 1 ? () => removeEnrollment(e.key) : null}
+          disabled={saving}
+        />
+      ))}
+
+      {needsPayment && (
+        <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 20, marginTop: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>First payment</div>
+          <div style={{ fontSize: 12, color: BRAND.grey, marginBottom: 16 }}>
+            {paying.map((e) => `${batchName(e.batchId)} ${fmtMMK(firstAmountOf(e, batches))}`).join(" + ")}
+            {paying.length > 1 ? ` = ${fmtMMK(firstTotal)}` : ""}. The paid date is also the day they join.
+            {correcting ? " The slip on file is kept unless you attach a new one." : " Receipted on save."}
+          </div>
+          <SlipFields
+            value={payment}
+            onChange={changePayment}
+            disabled={saving}
+            dropHint={correcting ? "Only if the slip attached was the wrong one." : "Kept with the payment and viewable later under Transactions."}
+          />
+          {!correcting && <SlipMissingNote value={payment} />}
+        </div>
+      )}
+
+      {error && <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: BRAND.redLight, color: BRAND.red, fontSize: 13 }}>⚠️ {error}</div>}
+
+      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 16 }}>
+        <button style={S.btn("secondary")} onClick={onClose} disabled={saving}>Cancel</button>
+        <button
+          style={{ ...S.btn("primary"), ...(needsPayment && !paymentReady ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
+          onClick={handleSave}
+          disabled={saving || (needsPayment && !paymentReady)}
+        >
+          {saving ? "Saving…" : correcting ? "Save & Show Receipt" : needsPayment ? "Save & Generate Receipt" : "Save Student"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// The form, then the receipts it produced, then — on "Edit details" — the form again in
+// correction mode, as many times as it takes.
+function StudentForm({ student, batches, allStudents, initialBatchId, addBatchId, onSave, onClose, receiptRenderer, onSwitchToExisting }) {
+  const [stage, setStage] = useState({ student, correcting: null, saved: null, receipts: null, round: 0 });
+
+  function saved({ student: savedStudent, payments = [] }) {
+    if (payments.length && receiptRenderer) setStage((s) => ({ ...s, saved: savedStudent, receipts: payments }));
+    else onClose();
+  }
+
+  if (stage.receipts) {
+    const { receipts, saved: savedStudent } = stage;
     return (
-      <Modal title={`Receipt — ${form.name} registered`} onClose={onClose}>
-        {receiptRenderer(receiptData)}
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-          <button style={S.btn("secondary")} onClick={onClose}>Done</button>
+      <Modal title={`Receipt${receipts.length > 1 ? "s" : ""} — ${savedStudent.name}`} onClose={onClose}>
+        {receipts.map((p, i) => (
+          <div key={p.id} style={i ? { marginTop: 24, paddingTop: 24, borderTop: `1px solid ${BRAND.border}` } : undefined}>
+            {receiptRenderer(p)}
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 12 }}>
+          <button
+            style={S.btn("secondary")}
+            onClick={() => setStage((s) => ({
+              student: s.saved,
+              correcting: {
+                paymentIds: s.receipts.map((p) => p.id),
+                enrollmentIds: s.receipts.map((p) => p.enrollmentId),
+                paidDate: s.receipts[0].paidDate,
+              },
+              saved: null,
+              receipts: null,
+              round: s.round + 1,
+            }))}
+          >
+            ✏️ Edit details
+          </button>
+          <button style={S.btn("primary")} onClick={onClose}>Done</button>
         </div>
       </Modal>
     );
   }
 
   return (
-    <Modal title={student ? "Edit Student" : "Add Student"} onClose={onClose}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="preview-grid">
-        <div style={S.formGroup}><label style={S.formLabel}>Full Name (English) *</label><input style={S.input} value={form.name} onChange={(e) => set("name", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Burmese Name</label><input style={S.input} value={form.nameBurmese || ""} onChange={(e) => set("nameBurmese", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Email</label><input style={S.input} value={form.email || ""} onChange={(e) => set("email", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Phone</label><input style={S.input} value={form.phone || ""} onChange={(e) => set("phone", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Telegram</label><input style={S.input} value={form.telegram || ""} onChange={(e) => set("telegram", e.target.value)} placeholder="@username" /></div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Batch</label>
-          {lockedBatchId !== undefined ? (
-            <div style={{ ...S.input, background: BRAND.cream, color: BRAND.charcoal, lineHeight: "20px" }}>
-              {batches.find((b) => b.id === lockedBatchId)?.name || "— No batch —"}
-            </div>
-          ) : (
-            <select style={S.select} value={form.batchId || ""} onChange={(e) => set("batchId", e.target.value)}>
-              <option value="">— No batch —</option>
-              {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          )}
-        </div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Subject</label>
-          <select style={S.select} value={form.subject} onChange={(e) => set("subject", e.target.value)}>
-            {SUBJECTS.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Status</label>
-          <select style={S.select} value={form.status} onChange={(e) => set("status", e.target.value)}>
-            <option value="Active">Active</option>
-            <option value="Inactive">Inactive</option>
-            <option value="Expelled">Expelled</option>
-          </select>
-        </div>
-        <div style={S.formGroup}><label style={S.formLabel}>Enrolled Date</label><input style={S.input} type="date" value={fmtDateInput(form.enrolledDate)} onChange={(e) => set("enrolledDate", e.target.value)} /></div>
-        <div style={S.formGroup}><label style={S.formLabel}>Billing Period</label><input style={S.input} type="date" value={fmtDateInput(form.billingStartDate || form.enrolledDate)} onChange={(e) => set("billingStartDate", e.target.value)} /></div>
-        <div style={S.formGroup}>
-          <label style={S.formLabel}>Guardian fb contact</label>
-          <input
-            style={S.input}
-            value={form.invoiceContact || ""}
-            onChange={(e) => set("invoiceContact", e.target.value)}
-            placeholder="Who finance sends the invoice to"
-          />
-        </div>
-        <div style={S.formGroup}><label style={S.formLabel}>Parent Phone</label><input style={S.input} value={form.parentPhone || ""} onChange={(e) => set("parentPhone", e.target.value)} /></div>
-      </div>
-      <div style={S.formGroup}><label style={S.formLabel}>Notes</label><textarea style={{ ...S.input, height: 60, resize: "vertical" }} value={form.notes || ""} onChange={(e) => set("notes", e.target.value)} /></div>
-
-      <PaymentPlanFields
-        plan={plan}
-        anchor={anchor}
-        customFee={form.customFee}
-        batchFee={batchFee}
-        onPlanChange={(next) => set("paymentPlan", next)}
-        onFeeChange={(fee) => set("customFee", fee)}
-        disabled={saving}
-      />
-      {!isNew && (
-        <div style={{ fontSize: 12, color: BRAND.grey, marginTop: -8, marginBottom: 16 }}>
-          Changing the plan changes what is invoiced from now on. Payments already recorded stay as they were.
-        </div>
-      )}
-
-      {isNew && (
-        <div style={{ border: `1px solid ${BRAND.border}`, borderRadius: 10, padding: 20, marginTop: 4 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>First payment</div>
-          <div style={{ fontSize: 12, color: BRAND.grey, marginBottom: 16 }}>
-            {fmtMMK(firstAmount)} {isInstallments
-              ? plan.installments.length === 1 ? "— the full payment" : `— installment 1 of ${plan.installments.length}`
-              : "for the first billing month"}. Recorded against the student and receipted on save.
-          </div>
-          <SlipFields
-            value={firstPayment}
-            onChange={setFirstPayment}
-            disabled={saving}
-            dropHint="Kept with the payment and viewable later under Transactions."
-          />
-          <SlipMissingNote value={firstPayment} />
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 12 }}>
-        <button style={S.btn("secondary")} onClick={onClose} disabled={saving}>Cancel</button>
-        <button
-          style={{ ...S.btn("primary"), ...(isNew && !isSlipComplete(firstPayment) ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
-          onClick={handleSave}
-          disabled={saving || (isNew && !isSlipComplete(firstPayment))}
-        >
-          {saving ? "Saving…" : !isNew || !receiptRenderer ? "Save Student" : "Save & Generate Receipt"}
-        </button>
-      </div>
-    </Modal>
+    <StudentFormBody
+      key={stage.round}
+      student={stage.student}
+      correcting={stage.correcting}
+      batches={batches}
+      allStudents={allStudents}
+      initialBatchId={initialBatchId}
+      addBatchId={stage.round === 0 ? addBatchId : undefined}
+      onSave={onSave}
+      onSaved={saved}
+      onClose={onClose}
+      onSwitchToExisting={onSwitchToExisting}
+    />
   );
 }
 
@@ -714,7 +896,7 @@ function NewStudentBatch({ name, students, showMoney }) {
       <div style={{ ...S.flexBetween, gap: 12, flexWrap: "wrap", padding: "14px 20px", background: BRAND.cream, borderBottom: `1px solid ${BRAND.border}` }}>
         <div style={{ fontWeight: 700, fontSize: 15, minWidth: 0 }}>{name}</div>
         <div style={{ fontSize: 13, color: BRAND.grey }}>
-          {students.length} new{showMoney && monthly > 0 && <> · <strong style={{ color: BRAND.green }}>{fmtMMK(monthly)}</strong>/month</>}
+          {students.length} joined{showMoney && monthly > 0 && <> · <strong style={{ color: BRAND.green }}>{fmtMMK(monthly)}</strong>/month</>}
         </div>
       </div>
       {students.map((s, i) => (
@@ -724,6 +906,7 @@ function NewStudentBatch({ name, students, showMoney }) {
             <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 2, fontSize: 12, color: BRAND.grey }}>
               {s.nameBurmese && s.nameBurmese !== s.name && <span>{s.nameBurmese}</span>}
               <span>Joined {fmtJoined(s.enrolledDate)}</span>
+              {s.existing && <span style={S.tag}>Already a student</span>}
               {s.status !== "Active" && <Badge stage={s.status} />}
             </div>
           </div>
@@ -733,6 +916,9 @@ function NewStudentBatch({ name, students, showMoney }) {
     </div>
   );
 }
+
+// New people that month — an existing student adding a batch is listed but not counted.
+const newPeople = (entries) => new Set(entries.filter((s) => !s.existing).map((s) => s.studentId)).size;
 
 export function NewStudentsPage({ showMoney = false }) {
   const [months, setMonths] = useState(null);
@@ -792,7 +978,7 @@ export function NewStudentsPage({ showMoney = false }) {
               }}
             >
               <div style={{ fontSize: 12, whiteSpace: "nowrap", opacity: active ? 0.9 : 0.7 }}>{fmtMonth(m.month, { month: "short", year: "numeric" })}</div>
-              <div style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.2 }}>{m.students.length}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.2 }}>{newPeople(m.students)}</div>
             </button>
           );
         })}
@@ -801,9 +987,14 @@ export function NewStudentsPage({ showMoney = false }) {
       {students.length > 0 && (
         <div style={S.statsRow}>
           <div style={S.statCard(BRAND.crimson)}>
-            <div style={S.statNum}>{students.length}</div>
+            <div style={S.statNum}>{newPeople(students)}</div>
             <div style={S.statLabel}>New in {fmtMonth(month)}</div>
-            {previous && <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 6 }}>{previous.students.length} in {fmtMonth(previous.month, { month: "long" })}</div>}
+            {previous && <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 6 }}>{newPeople(previous.students)} in {fmtMonth(previous.month, { month: "long" })}</div>}
+            {students.some((s) => s.existing) && (
+              <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 2 }}>
+                + {students.filter((s) => s.existing).length} existing student{students.filter((s) => s.existing).length === 1 ? "" : "s"} joined another batch
+              </div>
+            )}
           </div>
           {showMoney && (
             <div style={S.statCard(BRAND.green)}>
@@ -826,7 +1017,7 @@ export function NewStudentsPage({ showMoney = false }) {
             message={`No new students in ${fmtMonth(month)} yet`}
             action={latestWithStudents && (
               <button style={S.btn("secondary")} onClick={() => setPicked(latestWithStudents.month)}>
-                See {fmtMonth(latestWithStudents.month)} ({latestWithStudents.students.length})
+                See {fmtMonth(latestWithStudents.month)} ({newPeople(latestWithStudents.students)})
               </button>
             )}
           />
@@ -855,32 +1046,39 @@ export function StudentsPage({
   // ever created from inside a batch window, so the batch is implied and never picked.
   const [addingToBatchKey, setAddingToBatchKey] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
+  // A batch to add when the form was switched from "new student" to an existing one.
+  const [addBatchId, setAddBatchId] = useState(undefined);
   const [showAddBatch, setShowAddBatch] = useState(false);
   const [editingBatch, setEditingBatch] = useState(null);
 
-  const matches = (s) => {
-    if (filterStatus !== "all" && s.status !== filterStatus) return false;
+  // A student appears in every batch they attend. In a batch they have left they count as
+  // inactive there, whatever they are elsewhere.
+  const statusIn = (s, e) => (s.status === "Active" && e.status === "Inactive" ? "Inactive" : s.status);
+  const matches = ({ student: s, enrollment: e }) => {
+    if (filterStatus !== "all" && statusIn(s, e) !== filterStatus) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (
       s.name.toLowerCase().includes(q) ||
       (s.nameBurmese || "").toLowerCase().includes(q) ||
-      (s.phone || "").toLowerCase().includes(q) ||
-      (s.invoiceContact || "").toLowerCase().includes(q) ||
-      (s.email || "").toLowerCase().includes(q)
+      (s.parentPhone || "").toLowerCase().includes(q) ||
+      (s.telegram || "").toLowerCase().includes(q) ||
+      (s.invoiceContact || "").toLowerCase().includes(q)
     );
   };
+  const batchName = (id) => batches.find((b) => b.id === id)?.name || "No batch";
 
-  // Every batch, plus a trailing bucket for students who aren't in one.
+  // Every batch, plus a trailing bucket for students who aren't in one. Each entry is one
+  // student in one batch: { key, student, enrollment, status }.
   const groups = useMemo(() => {
-    const visible = students.filter(matches);
-    const byBatch = batches.map((b) => ({
-      batch: b,
-      students: visible.filter((s) => s.batchId === b.id).sort((a, b2) => a.name.localeCompare(b2.name)),
-    }));
+    const entries = students
+      .flatMap((s) => (s.enrollments || []).map((e) => ({ key: `${s.id}:${e.id}`, student: s, enrollment: e, status: statusIn(s, e) })))
+      .filter(matches)
+      .sort((a, b) => a.student.name.localeCompare(b.student.name));
+    const byBatch = batches.map((b) => ({ batch: b, students: entries.filter((x) => x.enrollment.batchId === b.id) }));
     const batchIds = new Set(batches.map((b) => b.id));
-    const orphans = visible.filter((s) => !s.batchId || !batchIds.has(s.batchId));
-    if (orphans.length) byBatch.push({ batch: null, students: orphans.sort((a, b2) => a.name.localeCompare(b2.name)) });
+    const orphans = entries.filter((x) => !x.enrollment.batchId || !batchIds.has(x.enrollment.batchId));
+    if (orphans.length) byBatch.push({ batch: null, students: orphans });
     return byBatch;
   }, [students, batches, search, filterStatus]);
 
@@ -891,8 +1089,22 @@ export function StudentsPage({
 
   // Closing is left to the form: a newly registered student shows its receipt in the same
   // window, and unmounting here would take that receipt with it.
-  async function saveStudent(form) {
-    return onSaveStudent(form);
+  async function saveStudent(form, mode) {
+    return onSaveStudent(form, mode);
+  }
+
+  // "Add the batch to this student": the new-student form becomes an edit of the existing
+  // student, with the batch already added.
+  function switchToExisting(student, batchId) {
+    setAddingToBatchKey(null);
+    setAddBatchId(batchId || "");
+    setEditingStudent(student);
+  }
+
+  function closeForm() {
+    setAddingToBatchKey(null);
+    setEditingStudent(null);
+    setAddBatchId(undefined);
   }
 
   async function deleteStudent(id) {
@@ -915,7 +1127,7 @@ export function StudentsPage({
   }
 
   async function deleteBatch(id) {
-    if (students.some((s) => s.batchId === id)) {
+    if (students.some((s) => (s.enrollments || []).some((e) => e.batchId === id))) {
       return alert("Cannot delete a batch that still has students in it.");
     }
     if (!confirm("Delete this batch?")) return;
@@ -1036,13 +1248,13 @@ export function StudentsPage({
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }} onClick={readOnly ? undefined : (e) => e.stopPropagation()}>
                       {batchStudents.map((s) => (
                         <button
-                          key={s.id}
-                          onClick={readOnly ? undefined : () => setEditingStudent(s)}
-                          title={readOnly ? s.name : `Edit ${s.name}`}
+                          key={s.key}
+                          onClick={readOnly ? undefined : () => setEditingStudent(s.student)}
+                          title={readOnly ? s.student.name : `Edit ${s.student.name}`}
                           style={{ ...S.btn("small"), gap: 6, padding: "4px 10px", opacity: s.status === "Active" ? 1 : 0.6 }}
                         >
-                          {s.name}
-                          {s.strikes > 0 && <Strikes count={s.strikes} />}
+                          {s.student.name}
+                          {s.student.strikes > 0 && <Strikes count={s.student.strikes} />}
                         </button>
                       ))}
                     </div>
@@ -1102,8 +1314,12 @@ export function StudentsPage({
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16 }}>
               {openGroup.students.map((s) => (
                 <StudentDetailCard
-                  key={s.id}
-                  student={s}
+                  key={s.key}
+                  student={s.student}
+                  enrollment={s.enrollment}
+                  otherBatches={(s.student.enrollments || [])
+                    .filter((e) => e.id !== s.enrollment.id && e.status !== "Inactive")
+                    .map((e) => batchName(e.batchId))}
                   batch={openGroup.batch}
                   readOnly={readOnly}
                   onEdit={setEditingStudent}
@@ -1119,14 +1335,17 @@ export function StudentsPage({
 
       {(addingToBatchKey !== null || editingStudent) && (
         <StudentForm
+          key={editingStudent ? `edit-${editingStudent.id}` : "new"}
           student={editingStudent}
           batches={batches}
-          // New students inherit the batch whose window they were added from, so the form
-          // shows it as fixed rather than offering a picker.
-          lockedBatchId={editingStudent ? undefined : addingToBatchKey === "__none" ? "" : addingToBatchKey}
+          allStudents={students}
+          // A new student starts in the batch whose window they were added from.
+          initialBatchId={editingStudent ? undefined : addingToBatchKey === "__none" ? "" : addingToBatchKey}
+          addBatchId={addBatchId}
           receiptRenderer={receiptRenderer}
           onSave={saveStudent}
-          onClose={() => { setAddingToBatchKey(null); setEditingStudent(null); }}
+          onClose={closeForm}
+          onSwitchToExisting={switchToExisting}
         />
       )}
 

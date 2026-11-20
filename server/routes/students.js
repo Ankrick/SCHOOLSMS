@@ -11,6 +11,7 @@ router.get("/", ctrl.getStudents);
 router.get("/new-per-month", requireRole("owner", "operator"), ctrl.getNewStudentsPerMonth);
 router.post("/", canManage, ctrl.createStudent);
 router.put("/:id", canManage, ctrl.updateStudent);
+router.put("/:id/registration", canManage, ctrl.correctRegistration);
 router.delete("/:id", canManage, ctrl.deleteStudent);
 router.patch("/:id/strikes/add", canManage, ctrl.addStrike);
 router.patch("/:id/strikes/remove", canManage, ctrl.removeStrike);

@@ -3,3 +3,4 @@ NODE_MODULES
 .env
 .env.local
 dist
+server/backups

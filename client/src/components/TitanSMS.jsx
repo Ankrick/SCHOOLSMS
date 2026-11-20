@@ -3,7 +3,7 @@ import html2canvas from "html2canvas";
 import * as api from "../api";
 import { StudentsPage, NewStudentsPage } from "./StudentsBatches";
 import { MarkPaidModal, SlipViewer } from "./PaymentSlip";
-import { thisMonth } from "../dates";
+import { today, thisMonth } from "../dates";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────
 const BRAND = {
@@ -229,6 +229,29 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
   const [selected, setSelected] = useState(new Set());
   const [statusSort, setStatusSort] = useState(null); // null | "outstanding" | "paid"
 
+  // An optional due-date window inside the months on screen, e.g. "what can I collect between
+  // the 10th and the 20th". Picking dates loads the months they fall in; moving to months that
+  // no longer hold them clears it.
+  const [dueFrom, setDueFrom] = useState("");
+  const [dueTo, setDueTo] = useState("");
+  const hasDueWindow = !!(dueFrom || dueTo);
+
+  function setDueWindow(from, to) {
+    setDueFrom(from);
+    setDueTo(to);
+    if (from || to) {
+      setFromMonth((from || to).slice(0, 7));
+      setToMonth((to || from).slice(0, 7));
+    }
+  }
+
+  useEffect(() => {
+    if ((dueFrom && dueFrom.slice(0, 7) < fromMonth) || (dueTo && dueTo.slice(0, 7) > toMonth)) {
+      setDueFrom("");
+      setDueTo("");
+    }
+  }, [fromMonth, toMonth]);
+
   const singleMonth = fromMonth === toMonth;
 
   // The months on screen are the only thing fetched, so stepping to next March costs one
@@ -249,7 +272,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     return () => { live = false; };
   }, [fromMonth, toMonth, reloadKey]);
 
-  useEffect(() => setSelected(new Set()), [search, filterStatus, filterBatch, fromMonth, toMonth]);
+  useEffect(() => setSelected(new Set()), [search, filterStatus, filterBatch, fromMonth, toMonth, dueFrom, dueTo]);
 
   const studentsById = useMemo(
     () => Object.fromEntries(students.map((s) => [s.id, s])),
@@ -266,6 +289,8 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
   const filtered = dues
     .filter((due) => {
       if (filterBatch !== "all" && due.batchId !== filterBatch) return false;
+      if (dueFrom && due.dueDate < dueFrom) return false;
+      if (dueTo && due.dueDate > dueTo) return false;
       if (filterStatus === "outstanding" && due.status === "Paid") return false;
       if (filterStatus !== "all" && filterStatus !== "outstanding" && due.status !== filterStatus) return false;
       if (search) {
@@ -297,7 +322,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     expected: filtered.reduce((sum, d) => sum + d.amount, 0),
     collected: filtered.filter((d) => d.status === "Paid").reduce((sum, d) => sum + d.amount, 0),
   };
-  const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all";
+  const isFiltered = search !== "" || filterStatus !== "all" || filterBatch !== "all" || hasDueWindow;
   const view = isFiltered
     ? {
         expected: shown.expected,
@@ -344,6 +369,7 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
       for (const due of target) {
         const { payment: saved } = await api.payDue({
           studentId: due.studentId,
+          enrollmentId: due.enrollmentId,
           periodStart: due.periodStart,
           ...payment,
         });
@@ -362,9 +388,19 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
     if (recorded.length) setReceipts(recorded);
   }
 
-  const rangeLabel = singleMonth
+  const dueWindowLabel = dueFrom && dueTo
+    ? dueFrom === dueTo ? fmtDate(dueFrom) : `${fmtDate(dueFrom)} – ${fmtDate(dueTo)}`
+    : dueFrom ? `${fmtDate(dueFrom)} onwards` : `up to ${fmtDate(dueTo)}`;
+  const rangeLabel = hasDueWindow
+    ? `fees due ${dueWindowLabel}`
+    : singleMonth
     ? monthLabel(fromMonth)
     : `${monthLabel(fromMonth)} – ${monthLabel(toMonth)}`;
+  const plusDays = (dateStr, n) => {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d + n)).toISOString().split("T")[0];
+  };
+  const owingInWindow = filtered.filter((d) => d.status !== "Paid");
 
   return (
     <div>
@@ -455,6 +491,40 @@ function InvoicesPage({ students, batches, settings, initialDues, initialTotals,
           )}
         </div>
       </div>
+
+      {/* Due-date window: how much can be collected between two dates. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: -8, marginBottom: 16 }} className="date-filter-row">
+        <span style={{ fontSize: 12, color: BRAND.grey, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Due between</span>
+        <input
+          style={{ ...S.input, width: 150, fontSize: 13 }}
+          type="date"
+          value={dueFrom}
+          // A start past the end pulls the end along, as the month pickers do.
+          onChange={(e) => setDueWindow(e.target.value, dueTo && e.target.value > dueTo ? e.target.value : dueTo)}
+          title="Due on or after"
+        />
+        <span style={{ fontSize: 12, color: BRAND.grey }}>–</span>
+        <input
+          style={{ ...S.input, width: 150, fontSize: 13 }}
+          type="date"
+          value={dueTo}
+          onChange={(e) => setDueWindow(dueFrom && e.target.value && e.target.value < dueFrom ? e.target.value : dueFrom, e.target.value)}
+          title="Due on or before"
+        />
+        <button style={S.btn("small")} onClick={() => setDueWindow(today(), today())}>Today</button>
+        <button style={S.btn("small")} onClick={() => setDueWindow(today(), plusDays(today(), 6))}>Next 7 days</button>
+        {hasDueWindow && (
+          <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => setDueWindow("", "")} title="Clear the dates">✕ Clear</button>
+        )}
+      </div>
+
+      {hasDueWindow && (
+        <div style={{ padding: "12px 16px", background: BRAND.orangeLight, border: `1px solid ${BRAND.orange}33`, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>
+          <strong>{fmtMMK(view.outstanding)}</strong> still to collect for fees due {dueWindowLabel}
+          {" "}— {owingInWindow.length} fee{owingInWindow.length === 1 ? "" : "s"} from {view.studentsLeft} student{view.studentsLeft === 1 ? "" : "s"}.
+          <span style={{ color: BRAND.grey }}> {fmtMMK(view.collected)} of {fmtMMK(view.expected)} already collected.</span>
+        </div>
+      )}
 
       {selected.size > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", background: BRAND.blueLight, border: `1px solid ${BRAND.blue}22`, borderRadius: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -1067,25 +1137,31 @@ export default function TitanSMS({ onLogout }) {
   }, [canSeeFinance]);
 
   // ── Student handlers ──
-  async function handleSaveStudent(form) {
-    if (form.id) {
-      const updated = await api.updateStudent(form.id, form);
-      setData((prev) => ({
-        ...prev,
-        students: prev.students.map((s) => (s.id === updated.id ? updated : s)),
-      }));
-      return updated;
-    } else {
-      // Registering also records the first payment, so both come back together and the
-      // form uses the payment to draw the receipt.
-      const { student, payment } = await api.createStudent(form);
-      setData((prev) => ({
-        ...prev,
-        students: [...prev.students, student],
-        paymentHistory: [payment, ...prev.paymentHistory],
-      }));
-      return { ...student, payment };
+  // Saving returns the student and the first-payment receipts of any batch added (or of the
+  // registration being corrected), which the form shows straight away.
+  async function handleSaveStudent(studentData, mode) {
+    const result = mode === "correct"
+      ? await api.correctRegistration(studentData.id, studentData)
+      : studentData.id
+      ? await api.updateStudent(studentData.id, studentData)
+      : await api.createStudent(studentData);
+    const { student, payments = [] } = result;
+    setData((prev) => ({
+      ...prev,
+      students: prev.students.some((s) => s.id === student.id)
+        ? prev.students.map((s) => (s.id === student.id ? student : s))
+        : [...prev.students, student],
+      paymentHistory: [
+        ...payments,
+        // A corrected receipt replaces the old copy; one dropped in the correction goes.
+        ...prev.paymentHistory.filter((ph) => !payments.some((p) => p.id === ph.id) && !(studentData.paymentIds || []).includes(ph.id)),
+      ],
+    }));
+    // A corrected name is written onto every receipt the student already has.
+    if (mode !== "create") {
+      api.getPaymentHistory().then((paymentHistory) => setData((prev) => ({ ...prev, paymentHistory }))).catch(() => {});
     }
+    return result;
   }
 
   async function handleDeleteStudent(id) {

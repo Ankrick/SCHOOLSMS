@@ -26,7 +26,18 @@ function readSlipPayload(body, subject = "an invoice can be marked paid") {
   }
   if (!DATA_URL_IMAGE.test(image)) return { error: "The payment slip must be a PNG, JPEG or WebP image." };
 
-  const paidDate = str(body.paidDate, 10);
+  const date = readPaidDate(body.paidDate);
+  if (date.error) return date;
+
+  return {
+    paidDate: date.paidDate,
+    slip: { image, filename: str(slip.filename, 120), attachedAt: new Date().toISOString() },
+  };
+}
+
+// The paid date on its own — for correcting a payment while keeping the slip on file.
+function readPaidDate(value) {
+  const paidDate = str(value, 10);
   // Round-tripping catches the days that do not exist: Date.parse rolls 2026-02-31 forward
   // to 3 March rather than rejecting it, which would silently move a payment.
   const roundTrip = new Date(paidDate + "T00:00:00Z");
@@ -38,11 +49,7 @@ function readSlipPayload(body, subject = "an invoice can be marked paid") {
   if (paidDate > limit) {
     return { error: `The paid date (${paidDate}) is in the future. Enter the date shown on the slip.` };
   }
-
-  return {
-    paidDate,
-    slip: { image, filename: str(slip.filename, 120), attachedAt: new Date().toISOString() },
-  };
+  return { paidDate };
 }
 
 // A payment record echoed back to the client keeps every field except the slip image —
@@ -55,4 +62,4 @@ function withoutSlipImage(payment) {
   return { ...json, slip };
 }
 
-module.exports = { readSlipPayload, withoutSlipImage };
+module.exports = { readSlipPayload, readPaidDate, withoutSlipImage };

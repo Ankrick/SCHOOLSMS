@@ -53,7 +53,10 @@ export const logout = () => {
 // Students
 export const getStudents = () => api.get("/students").then(handle).catch(err);
 export const createStudent = (data) => api.post("/students", data).then(handle).catch(err);
+// Both return { student, payments } — payments are the first-payment receipts of any batch added.
 export const updateStudent = (id, data) => api.put(`/students/${id}`, data).then(handle).catch(err);
+// Puts right a registration just entered; `data.paymentIds` are the receipts being corrected.
+export const correctRegistration = (id, data) => api.put(`/students/${id}/registration`, data).then(handle).catch(err);
 export const deleteStudent = (id) => api.delete(`/students/${id}`).then(handle).catch(err);
 export const addStrike = (id) => api.patch(`/students/${id}/strikes/add`).then(handle).catch(err);
 export const removeStrike = (id) =>

@@ -40,7 +40,8 @@ exports.updateBatch = async (req, res, next) => {
 
 exports.deleteBatch = async (req, res, next) => {
   try {
-    const hasStudents = await Student.exists({ batchId: req.params.id });
+    // Enrolled by an enrollment, or by the batch on a record from before enrollments.
+    const hasStudents = await Student.exists({ $or: [{ batchId: req.params.id }, { "enrollments.batchId": req.params.id }] });
     if (hasStudents)
       return res
         .status(400)

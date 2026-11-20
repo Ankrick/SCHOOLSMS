@@ -6,6 +6,7 @@ const Batch = require("../models/Batch");
 const Lead = require("../models/Lead");
 const Settings = require("../models/Settings");
 const PaymentHistory = require("../models/PaymentHistory");
+const { enrollmentsOf, enrollmentIdOfPayment, studentJSON, LEGACY_FIELDS } = require("../utils/enrollments");
 
 const DEFAULT_BATCHES = [
   { name: "CIE 0478 — Sat/Mon", syllabus: "CIE", days: "Sat & Mon", maxStudents: 15, fee: 180000 },
@@ -64,10 +65,21 @@ router.post("/import", async (req, res, next) => {
     const batchIdMap = {};
     batches.forEach((b, i) => { if (b.id && newBatches[i]) batchIdMap[b.id] = newBatches[i].id; });
 
-    const mappedStudents = students.map((s) => ({
-      ...strip(s),
-      batchId: batchIdMap[s.batchId] || s.batchId || "",
-    }));
+    // Enrollments keep their ids, so payments keep pointing at the right batch; only the batch
+    // ids they name are renumbered. A backup from before enrollments has one batch per student.
+    const OBJECT_ID = /^[a-f0-9]{24}$/;
+    const mappedStudents = students.map((s) => {
+      const out = strip(s);
+      // Read the way the app reads it (old backups included), so a backup's one-batch student
+      // becomes an enrollment whose id is the student's old id — the id its payments resolve to.
+      out.enrollments = enrollmentsOf(s).map(({ id, ...e }) => ({
+        ...e,
+        ...(OBJECT_ID.test(id) ? { _id: id } : {}),
+        batchId: batchIdMap[e.batchId] || e.batchId || "",
+      }));
+      for (const f of LEGACY_FIELDS) delete out[f];
+      return out;
+    });
     const newStudents = mappedStudents.length ? await Student.insertMany(mappedStudents) : [];
     const studentIdMap = {};
     students.forEach((s, i) => { if (s.id && newStudents[i]) studentIdMap[s.id] = newStudents[i].id; });
@@ -78,8 +90,11 @@ router.post("/import", async (req, res, next) => {
         ? studentIdMap[l.convertedStudentId] || l.convertedStudentId
         : null,
     }));
+    const oldStudentById = Object.fromEntries(students.map((s) => [s.id, s]));
     const mappedHistory = paymentHistory.map((ph) => ({
       ...strip(ph),
+      // Settled against the backup's own ids, before the student ids are renumbered.
+      enrollmentId: enrollmentIdOfPayment(ph, oldStudentById[ph.studentId]),
       studentId: studentIdMap[ph.studentId] || ph.studentId || "",
       batchId: batchIdMap[ph.batchId] || ph.batchId || "",
     }));
@@ -95,7 +110,7 @@ router.post("/import", async (req, res, next) => {
     ]);
 
     res.json({
-      students: newStudents,
+      students: newStudents.map(studentJSON),
       teachers: newTeachers,
       batches: newBatches,
       leads: newLeads,

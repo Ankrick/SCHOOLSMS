@@ -1,4 +1,6 @@
 const PaymentHistory = require("../models/PaymentHistory");
+const Student = require("../models/Student");
+const { enrollmentIdOfPayment } = require("../utils/enrollments");
 
 exports.getPaymentHistory = async (req, res, next) => {
   try {
@@ -8,8 +10,14 @@ exports.getPaymentHistory = async (req, res, next) => {
     // The attached slip image is a data URL worth ~150 KB a row, which would dwarf the
     // rest of the list. Everything else about the slip stays, so the table can still show
     // that one is on file; the image itself is fetched per record by getSlip below.
-    const history = await PaymentHistory.find(filter).select("-slip.image").sort({ paidDate: -1 });
-    res.json(history);
+    const [history, students] = await Promise.all([
+      PaymentHistory.find(filter).select("-slip.image").sort({ paidDate: -1 }),
+      Student.find().select("batchId enrollments._id enrollments.batchId"),
+    ]);
+    // Every payment names the enrollment (batch) it paid for — worked out here for payments
+    // recorded before enrollments, so screens can match them without knowing the old rule.
+    const studentById = Object.fromEntries(students.map((s) => [s.id, s]));
+    res.json(history.map((p) => ({ ...p.toJSON(), enrollmentId: enrollmentIdOfPayment(p, studentById[p.studentId]) })));
   } catch (err) {
     next(err);
   }
