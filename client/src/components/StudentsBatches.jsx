@@ -1029,6 +1029,72 @@ export function NewStudentsPage({ showMoney = false }) {
   );
 }
 
+// ─── SEARCH RESULTS ──────────────────────────────────────────────
+// While the search box has text the batch grid gives way to the matching students, each once,
+// with every batch they attend — so finding a student never means guessing their batch first.
+// A batch chip opens that batch's window; Edit opens the student.
+function SearchResults({ entries, batchName, readOnly, onEdit, onDelete, onOpenBatch }) {
+  const byStudent = new Map();
+  for (const x of entries) {
+    if (!byStudent.has(x.student.id)) byStudent.set(x.student.id, x.student);
+  }
+  const results = [...byStudent.values()];
+
+  if (results.length === 0) {
+    return (
+      <div style={S.card} className="card">
+        <EmptyState icon="🔍" message="No students match that search" />
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.card} className="card">
+      <div style={{ fontSize: 12, color: BRAND.grey, marginBottom: 8 }}>
+        {results.length} student{results.length === 1 ? "" : "s"} found
+      </div>
+      {results.map((s, i) => (
+        <div
+          key={s.id}
+          style={{ ...S.flexBetween, gap: 12, flexWrap: "wrap", padding: "12px 0", borderTop: i ? `1px solid ${BRAND.border}` : "none" }}
+        >
+          <div style={{ minWidth: 0, flex: "1 1 260px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 700, fontSize: 15 }}>{s.name}</span>
+              {s.nameBurmese && s.nameBurmese !== s.name && <span style={{ fontSize: 12, color: BRAND.grey }}>{s.nameBurmese}</span>}
+              {s.status !== "Active" && <Badge stage={s.status} />}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+              {(s.enrollments || []).map((e) => (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => onOpenBatch(e.batchId || "__none")}
+                  title="Open this batch"
+                  style={{ ...S.btn("small"), padding: "3px 10px", opacity: e.status === "Inactive" ? 0.55 : 1 }}
+                >
+                  {batchName(e.batchId)}{e.status === "Inactive" ? " (left)" : ""}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: BRAND.grey, marginTop: 6, display: "flex", gap: 14, flexWrap: "wrap" }}>
+              {s.telegram && <span>Telegram {s.telegram}</span>}
+              {!readOnly && s.invoiceContact && <span>Guardian {s.invoiceContact}</span>}
+              {s.parentPhone && <span>Parent phone {s.parentPhone}</span>}
+            </div>
+          </div>
+          {!readOnly && (
+            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              <button style={S.btn("small")} onClick={() => onEdit(s)}>✏️ Edit</button>
+              <button style={{ ...S.btn("small"), color: BRAND.red }} onClick={() => onDelete(s.id)}>🗑️</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── THE PAGE ────────────────────────────────────────────────────
 export function StudentsPage({
   students, batches, teachers = [],
@@ -1157,7 +1223,16 @@ export function StudentsPage({
         {!readOnly && <button style={S.btn("gold")} onClick={() => setShowAddBatch(true)}>➕ Add Batch</button>}
       </div>
 
-      {groups.length === 0 ? (
+      {search.trim() ? (
+        <SearchResults
+          entries={groups.flatMap((g) => g.students)}
+          batchName={batchName}
+          readOnly={readOnly}
+          onEdit={setEditingStudent}
+          onDelete={deleteStudent}
+          onOpenBatch={setOpenBatchKey}
+        />
+      ) : groups.length === 0 ? (
         <div style={S.card} className="card">
           <EmptyState
             icon="🎓"
